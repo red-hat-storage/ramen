@@ -8,14 +8,13 @@ on:  # yamllint disable-line rule:truthy
       - v*
     branches:
       - release-*
-      - main
   pull_request:
     branches:
       - '*'
 env:
   GO_VERSION: "1.16"
   # Use IMAGE_TAG_BASE and IMAGE_TAG Makefile variables to build various images
-  IMAGE_TAG_BASE: "quay.io/ramendr/ramen"
+  IMAGE_TAG_BASE: "quay.io/ocs-dev/ramen"
   IMAGE_TAG: "sanity"
 defaults:
   run:
@@ -163,10 +162,9 @@ jobs:
     needs: [deploy-check, lint, golangci]
     if: >
       (github.event_name == 'push') &&
-      (github.ref == 'refs/heads/main' ||
-       startsWith(github.ref, 'refs/heads/release-') ||
+      (startsWith(github.ref, 'refs/heads/release-') ||
        startsWith(github.ref, 'refs/tags/v')) &&
-      (github.repository == 'ramendr/ramen')
+      (github.repository == 'red-hat-storage/ramen')
     runs-on: ubuntu-20.04
     steps:
       - name: Download image artifact
