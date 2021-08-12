@@ -1,0 +1,23 @@
+resources:
+- ../bases/ramen_dr_cluster.clusterserviceversion.yaml
+- ../../default
+- ../../samples
+- ../../../scorecard
+
+patches:
+- patch: |-
+    - op: replace
+      path: /metadata/name
+      value: odr-cluster.v0.0.0
+    - op: replace
+      path: /spec/displayName
+      value: Openshift DR Cluster Operator
+    - op: replace
+      path: /spec/description
+      value: OpenShift DR is a disaster-recovery orchestrator for stateful applications
+        across a set of peer kubernetes clusters which are deployed and managed using
+        open-cluster-management (OCM) and provides cloud-native interfaces to orchestrate
+        the life-cycle of an application's state on PersistentVolumes.
+  target:
+    kind: ClusterServiceVersion
+    name: ramen-dr-cluster.v0.0.0
