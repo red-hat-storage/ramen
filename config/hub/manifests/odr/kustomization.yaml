@@ -4,6 +4,16 @@ resources:
 - ../../samples
 - ../../../scorecard
 
+configMapGenerator:
+- name: openshift-trusted-cabundle
+  options:
+    disableNameSuffixHash: true
+    labels:
+      config.openshift.io/inject-trusted-cabundle: "true"
+
+patchesStrategicMerge:
+- manager_openshift_trusted_cabundle.yaml
+
 patches:
 - patch: |-
     - op: add
