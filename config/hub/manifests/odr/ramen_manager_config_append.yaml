@@ -1,0 +1,8 @@
+drClusterOperator:
+  deploymentAutomationEnabled: true
+  channelName: alpha
+  packageName: odr-cluster-operator
+  namespaceName: openshift-dr-system
+  catalogSourceName: redhat-operators
+  catalogSourceNamespaceName: openshift-marketplace
+  clusterServiceVersionName: odr-cluster-operator.v0.0.1

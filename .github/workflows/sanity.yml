@@ -18,6 +18,8 @@ env:
   IMAGE_REPOSITORY: "ocs-dev"
   IMAGE_NAME: "odr"
   IMAGE_TAG: "sanity"
+  OPERATOR_SUGGESTED_NAMESPACE: "openshift-dr-system"
+  AUTO_CONFIGURE_DR_CLUSTER: "false"
 defaults:
   run:
     shell: bash
