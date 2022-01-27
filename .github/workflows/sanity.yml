@@ -12,7 +12,7 @@ on:  # yamllint disable-line rule:truthy
     branches:
       - '*'
 env:
-  GO_VERSION: "1.15"
+  GO_VERSION: "1.16"
   IMAGE_TAG_BASE: "quay.io/ocs-dev/odr"
   IMAGE_REGISTRY: "quay.io"
   IMAGE_REPOSITORY: "ocs-dev"
