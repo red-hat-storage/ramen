@@ -1304,17 +1304,9 @@ func (v *VRGInstance) preparePVCForVRDeletion(pvc *corev1.PersistentVolumeClaim,
 		return nil
 	}
 
-	// For Async mode, we want to change the retention policy back to delete
-	// and remove the annotation.
-	// For Sync mode, we don't want to set the retention policy to delete as
-	// both the primary and the secondary VRG map to the same volume. The only
-	// state where a delete retention policy is required for the sync mode is
-	// when the VRG is primary.
-	if !(v.instance.Spec.ReplicationState == ramendrv1alpha1.Secondary &&
-		v.instance.Spec.Sync.Mode == ramendrv1alpha1.SyncModeEnabled) {
-		if err := v.undoPVRetentionForPVC(*pvc, log); err != nil {
-			return err
-		}
+	// Change PV `reclaimPolicy` back to stored state
+	if err := v.undoPVRetentionForPVC(*pvc, log); err != nil {
+		return err
 	}
 
 	// TODO: Delete the PV from the backing store? But when is it safe to do so?
