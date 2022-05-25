@@ -53,7 +53,7 @@ type PVDownloader interface {
 }
 
 type PVUploader interface {
-	UploadPV(v interface{}, s3ProfileName string, pvc *corev1.PersistentVolumeClaim) error
+	UploadPV(storer ObjectStorer, v interface{}, s3ProfileName string, pvc *corev1.PersistentVolumeClaim) error
 }
 
 type PVDeleter interface {
@@ -312,6 +312,11 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 	return v.processVRG()
 }
 
+type CachedObjectStorer struct {
+	storer ObjectStorer
+	err    error
+}
+
 type VRGInstance struct {
 	reconciler          *VolumeReplicationGroupReconciler
 	ctx                 context.Context
@@ -322,6 +327,7 @@ type VRGInstance struct {
 	replClassList       *volrep.VolumeReplicationClassList
 	vrcUpdated          bool
 	namespacedName      string
+	objectStorers       map[string]CachedObjectStorer
 }
 
 const (
@@ -1452,10 +1458,28 @@ func (v *VRGInstance) uploadPVToS3Stores(pvc *corev1.PersistentVolumeClaim, log 
 
 func (v *VRGInstance) PVUploadToObjectStore(pvc *corev1.PersistentVolumeClaim,
 	log logr.Logger) ([]string, error) {
+	var (
+		err    error
+		storer ObjectStorer
+	)
+
 	s3Profiles := []string{}
 	// Upload the PV to all the S3 profiles in the VRG spec
 	for _, s3ProfileName := range v.instance.Spec.S3Profiles {
-		if err := v.reconciler.PVUploader.UploadPV(v, s3ProfileName, pvc); err != nil {
+		switch {
+		case s3ProfileName == "":
+			err = fmt.Errorf("error uploading cluster data of PV %s because VRG spec has no S3 profiles",
+				pvc.Name)
+		default:
+			storer, err = v.getOrCacheObjectStorer(s3ProfileName)
+			if err != nil {
+				break
+			}
+
+			err = v.reconciler.PVUploader.UploadPV(storer, v, s3ProfileName, pvc)
+		}
+
+		if err != nil {
 			log.Error(err, fmt.Sprintf("error uploading PV cluster data to s3Profile %s, %v",
 				s3ProfileName, err))
 
@@ -1476,34 +1500,46 @@ func (v *VRGInstance) PVUploadToObjectStore(pvc *corev1.PersistentVolumeClaim,
 	return s3Profiles, nil
 }
 
+func (v *VRGInstance) getOrCacheObjectStorer(s3ProfileName string) (ObjectStorer, error) {
+	if v.objectStorers == nil {
+		v.objectStorers = make(map[string]CachedObjectStorer)
+	}
+
+	// return a cached objectStore if present
+	if cachedObjectStore, ok := v.objectStorers[s3ProfileName]; ok {
+		return cachedObjectStore.storer, cachedObjectStore.err
+	}
+
+	// create a new objectStore (connection)
+	objectStore, err := v.reconciler.ObjStoreGetter.ObjectStore(
+		v.ctx,
+		v.reconciler.APIReader,
+		s3ProfileName,
+		v.namespacedName,
+		v.log)
+	if err != nil {
+		err = fmt.Errorf("error connecting to object store for s3Profile %s, %w", s3ProfileName, err)
+	}
+
+	// cache the objectStore (or the error)
+	v.objectStorers[s3ProfileName] = CachedObjectStorer{
+		storer: objectStore,
+		err:    err,
+	}
+
+	return objectStore, err
+}
+
 type ObjectStorePVUploader struct{}
 
 // UploadPV checks if the VRG spec has been configured with an s3 endpoint,
 // connects to the object store, gets the PV cluster data of the input PVC from
 // etcd, creates a bucket in s3 store, uploads the PV cluster data to s3 store.
-func (ObjectStorePVUploader) UploadPV(v interface{}, s3ProfileName string,
+func (ObjectStorePVUploader) UploadPV(objectStore ObjectStorer, v interface{}, s3ProfileName string,
 	pvc *corev1.PersistentVolumeClaim) (err error) {
 	vrg, ok := v.(*VRGInstance)
 	if !ok {
 		return fmt.Errorf("error uploading PV, input is not VRGInstance")
-	}
-
-	if s3ProfileName == "" {
-		return fmt.Errorf("error uploading cluster data of PV %s because VRG spec has no S3 profiles",
-			pvc.Name)
-	}
-
-	objectStore, err :=
-		vrg.reconciler.ObjStoreGetter.ObjectStore(
-			vrg.ctx,
-			vrg.reconciler.APIReader,
-			s3ProfileName,
-			vrg.namespacedName, /* debugTag */
-			vrg.log,
-		)
-	if err != nil {
-		return fmt.Errorf("error connecting to object store when uploading PV %s to s3Profile %s, %w",
-			pvc.Name, s3ProfileName, err)
 	}
 
 	pv := corev1.PersistentVolume{}
