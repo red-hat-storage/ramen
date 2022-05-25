@@ -541,9 +541,17 @@ func (r *DRPlacementControlReconciler) createDRPCInstance(ctx context.Context,
 		return nil, fmt.Errorf("failed to get DRPolicy %w", err)
 	}
 
-	if err := rmnutil.DrpolicyValidated(drPolicy); err != nil {
-		return nil, fmt.Errorf("DRPolicy not valid %w", err)
-	}
+	//
+	// This is a ODF 4.10 workaround for BZ-2090080.
+	// In ODF 4.11, we will rework this to distinguish the DRPolicy validation errors.
+	// So far we have two potential solutions:
+	// 1. Have the DRPolicy state to indicate whether the cluster is inaccessible, and another
+	//    to indicate the s3 store is inaccessible.
+	// 2. Just validate that at least one s3store is valid instead of validating all
+	//
+	// if err := rmnutil.DrpolicyValidated(drPolicy); err != nil {
+	// 	return nil, fmt.Errorf("DRPolicy not valid %w", err)
+	// }
 
 	// We only create DRPC PlacementRule if the preferred cluster is not configured
 	drpcPlRule, err := r.getDRPCPlacementRule(ctx, drpc, usrPlRule, drPolicy)
