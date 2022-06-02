@@ -1477,6 +1477,12 @@ func (v *VRGInstance) PVUploadToObjectStore(pvc *corev1.PersistentVolumeClaim,
 			}
 
 			err = v.reconciler.PVUploader.UploadPV(storer, v, s3ProfileName, pvc)
+			if err != nil {
+				// HACK: stash any errors from upload PV, and stop attempting to upload to the same store
+				v.updateCacheObjectStorer(
+					s3ProfileName,
+					fmt.Errorf("error uploading to s3 profile %s, will retry later", s3ProfileName))
+			}
 		}
 
 		if err != nil {
@@ -1528,6 +1534,13 @@ func (v *VRGInstance) getOrCacheObjectStorer(s3ProfileName string) (ObjectStorer
 	}
 
 	return objectStore, err
+}
+
+func (v *VRGInstance) updateCacheObjectStorer(s3ProfileName string, err error) {
+	v.objectStorers[s3ProfileName] = CachedObjectStorer{
+		storer: nil,
+		err:    err,
+	}
 }
 
 type ObjectStorePVUploader struct{}
