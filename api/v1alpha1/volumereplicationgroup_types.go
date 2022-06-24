@@ -99,6 +99,21 @@ type VRGSyncSpec struct {
 	Mode SyncMode `json:"mode"`
 }
 
+// VRGAction which will be either a Failover or Relocate
+// +kubebuilder:validation:Enum=Failover;Relocate
+type VRGAction string
+
+// These are the valid values for VRGAction
+const (
+	// Failover, VRG was failed over to/from this cluster,
+	// the to/from is determined by VRG spec.ReplicationState values of Primary/Secondary respectively
+	VRGActionFailover = VRGAction("Failover")
+
+	// Relocate, VRG was relocated to/from this cluster,
+	// the to/from is determined by VRG spec.ReplicationState values of Primary/Secondary respectively
+	VRGActionRelocate = VRGAction("Relocate")
+)
+
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
 // VolumeReplicationGroup (VRG) spec declares the desired schedule for data
@@ -128,6 +143,10 @@ type VolumeReplicationGroupSpec struct {
 
 	Async VRGAsyncSpec `json:"async,omitempty"`
 	Sync  VRGSyncSpec  `json:"sync,omitempty"`
+
+	// Action is either Failover or Relocate
+	//+optional
+	Action VRGAction `json:"action,omitempty"`
 }
 
 type ProtectedPVC struct {
