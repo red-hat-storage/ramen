@@ -4,7 +4,7 @@ go 1.16
 
 require (
 	github.com/aws/aws-sdk-go v1.38.41
-	github.com/csi-addons/volume-replication-operator v0.1.0
+	github.com/csi-addons/volume-replication-operator v0.3.1-0.20220623123415-de6a161ca0ed
 	github.com/ghodss/yaml v1.0.1-0.20190212211648-25d852aebe32
 	github.com/go-logr/logr v0.4.0
 	github.com/onsi/ginkgo v1.16.4
