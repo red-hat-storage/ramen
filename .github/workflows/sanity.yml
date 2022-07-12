@@ -14,11 +14,12 @@ on:  # yamllint disable-line rule:truthy
       - '*'
 env:
   GO_VERSION: "1.17"
-  IMAGE_TAG_BASE: "quay.io/ramendr/ramen"
+  IMAGE_TAG_BASE: "quay.io/ocs-dev/odr"
   IMAGE_REGISTRY: "quay.io"
-  IMAGE_REPOSITORY: "ramendr"
-  IMAGE_NAME: "ramen"
+  IMAGE_REPOSITORY: "ocs-dev"
+  IMAGE_NAME: "odr"
   IMAGE_TAG: "sanity"
+  OPERATOR_SUGGESTED_NAMESPACE: "openshift-dr-system"
 defaults:
   run:
     shell: bash
@@ -176,7 +177,7 @@ jobs:
       (github.ref == 'refs/heads/main' ||
        startsWith(github.ref, 'refs/heads/release-') ||
        startsWith(github.ref, 'refs/tags/v')) &&
-      (github.repository == 'ramendr/ramen')
+      (github.repository == 'red-hat-storage/ramen')
     runs-on: ubuntu-20.04
     steps:
       - name: Download image artifact
