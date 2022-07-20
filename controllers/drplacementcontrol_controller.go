@@ -456,6 +456,13 @@ func (r *DRPlacementControlReconciler) createDRPCInstance(ctx context.Context,
 		},
 	}
 
+	isMetro, _ := dRPolicySupportsMetro(drPolicy, drClusters)
+	if isMetro {
+		d.volSyncDisabled = true
+
+		r.Log.Info("volsync is set to disabled")
+	}
+
 	// Save the instance status
 	d.instance.Status.DeepCopyInto(&d.savedInstanceStatus)
 	r.Log.Info(fmt.Sprintf("PlacementRule Status is: (%+v)", usrPlRule.Status))
