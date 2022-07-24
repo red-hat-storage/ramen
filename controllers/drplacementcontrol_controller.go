@@ -565,6 +565,17 @@ func (r *DRPlacementControlReconciler) processDeletion(ctx context.Context,
 	drpc *rmn.DRPlacementControl, usrPlRule *plrv1.PlacementRule) (ctrl.Result, error) {
 	r.Log.Info("Processing DRPC deletion")
 
+	if !controllerutil.ContainsFinalizer(drpc, DRPCFinalizer) {
+		return ctrl.Result{}, nil
+	}
+
+	// Run finalization logic for dprc.
+	// If the finalization logic fails, don't remove the finalizer so
+	// that we can retry during the next reconciliation.
+	if err := r.finalizeDRPC(ctx, drpc); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if usrPlRule != nil && controllerutil.ContainsFinalizer(usrPlRule, DRPCFinalizer) {
 		// Remove DRPCFinalizer from User PlacementRule.
 		controllerutil.RemoveFinalizer(usrPlRule, DRPCFinalizer)
@@ -575,24 +586,15 @@ func (r *DRPlacementControlReconciler) processDeletion(ctx context.Context,
 		}
 	}
 
-	if controllerutil.ContainsFinalizer(drpc, DRPCFinalizer) {
-		// Run finalization logic for dprc.
-		// If the finalization logic fails, don't remove the finalizer so
-		// that we can retry during the next reconciliation.
-		if err := r.finalizeDRPC(ctx, drpc); err != nil {
-			return ctrl.Result{}, err
-		}
+	// Remove DRPCFinalizer from DRPC.
+	controllerutil.RemoveFinalizer(drpc, DRPCFinalizer)
 
-		// Remove DRPCFinalizer from DRPC.
-		controllerutil.RemoveFinalizer(drpc, DRPCFinalizer)
-
-		err := r.Update(ctx, drpc)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update drpc %w", err)
-		}
-
-		r.Callback(drpc.Name, "deleted")
+	err := r.Update(ctx, drpc)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to update drpc %w", err)
 	}
+
+	r.Callback(drpc.Name, "deleted")
 
 	return ctrl.Result{}, nil
 }
