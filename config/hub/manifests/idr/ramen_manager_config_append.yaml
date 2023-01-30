@@ -1,0 +1,9 @@
+drClusterOperator:
+  deploymentAutomationEnabled: true
+  s3SecretDistributionEnabled: true
+  channelName: alpha
+  packageName: odr-cluster-operator
+  namespaceName: ramen-system
+  catalogSourceName: ibm-catalogsource
+  catalogSourceNamespaceName: openshift-marketplace
+  clusterServiceVersionName: odr-cluster-operator.v0.0.1
