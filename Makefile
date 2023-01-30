@@ -44,10 +44,10 @@ KUBE_OBJECT_PROTECTION_DISABLED ?= true
 
 HUB_NAME ?= $(IMAGE_NAME)-hub-operator
 ifeq (dr,$(findstring dr,$(IMAGE_NAME)))
-	DRCLUSTER_NAME = $(IMAGE_NAME)-cluster-operator
+	DRCLUSTER_NAME ?= $(IMAGE_NAME)-cluster-operator
 	BUNDLE_IMG_DRCLUSTER ?= $(IMAGE_TAG_BASE)-cluster-operator-bundle:$(IMAGE_TAG)
 else
-	DRCLUSTER_NAME = $(IMAGE_NAME)-dr-cluster-operator
+	DRCLUSTER_NAME ?= $(IMAGE_NAME)-dr-cluster-operator
 	BUNDLE_IMG_DRCLUSTER ?= $(IMAGE_TAG_BASE)-dr-cluster-operator-bundle:$(IMAGE_TAG)
 endif
 
