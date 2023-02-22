@@ -1,6 +1,6 @@
 resources:
 - ../bases/ramen_hub.clusterserviceversion.yaml
-- ../../default
+- ../../default/ocp
 - ../../samples
 - ../../../scorecard
 
