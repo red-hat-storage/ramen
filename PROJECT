@@ -12,15 +12,6 @@ repo: github.com/ramendr/ramen
 resources:
 - api:
     crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: openshift.io
-  group: ramendr
-  kind: VolumeReplicationGroup
-  path: github.com/ramendr/ramen/api/v1alpha1
-  version: v1alpha1
-- api:
-    crdVersion: v1
   controller: true
   domain: openshift.io
   group: ramendr
@@ -53,4 +44,13 @@ resources:
   kind: ProtectedVolumeReplicationGroupList
   path: github.com/ramendr/ramen/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: openshift.io
+  group: ramendr
+  kind: VolumeReplicationGroup
+  path: github.com/ramendr/ramen/api/v1alpha2
+  version: v1alpha2
 version: "3"

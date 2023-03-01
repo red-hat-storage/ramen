@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"reflect"
 
-	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -30,7 +30,7 @@ func (v *VRGInstance) restorePVsForVolSync() error {
 
 			protectedPVC := v.findProtectedPVC(rdSpec.ProtectedPVC.Name)
 			if protectedPVC == nil {
-				protectedPVC = &ramendrv1alpha1.ProtectedPVC{}
+				protectedPVC = &ramendrv1alpha2.ProtectedPVC{}
 				rdSpec.ProtectedPVC.DeepCopyInto(protectedPVC)
 				v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, *protectedPVC)
 			}
@@ -45,7 +45,7 @@ func (v *VRGInstance) restorePVsForVolSync() error {
 
 		protectedPVC := v.findProtectedPVC(rdSpec.ProtectedPVC.Name)
 		if protectedPVC == nil {
-			protectedPVC = &ramendrv1alpha1.ProtectedPVC{}
+			protectedPVC = &ramendrv1alpha2.ProtectedPVC{}
 			rdSpec.ProtectedPVC.DeepCopyInto(protectedPVC)
 			v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, *protectedPVC)
 		}
@@ -106,7 +106,7 @@ func (v *VRGInstance) reconcileVolSyncAsPrimary() (requeue bool) {
 }
 
 func (v *VRGInstance) reconcilePVCAsVolSyncPrimary(pvc corev1.PersistentVolumeClaim) (requeue bool) {
-	newProtectedPVC := &ramendrv1alpha1.ProtectedPVC{
+	newProtectedPVC := &ramendrv1alpha2.ProtectedPVC{
 		Name:               pvc.Name,
 		ProtectedByVolSync: true,
 		StorageClassName:   pvc.Spec.StorageClassName,
@@ -125,7 +125,7 @@ func (v *VRGInstance) reconcilePVCAsVolSyncPrimary(pvc corev1.PersistentVolumeCl
 
 	// Not much need for VolSyncReplicationSourceSpec anymore - but keeping it around in case we want
 	// to add anything to it later to control anything in the ReplicationSource
-	rsSpec := ramendrv1alpha1.VolSyncReplicationSourceSpec{
+	rsSpec := ramendrv1alpha2.VolSyncReplicationSourceSpec{
 		ProtectedPVC: *protectedPVC,
 	}
 
@@ -228,7 +228,7 @@ func (v *VRGInstance) aggregateVolSyncDataReadyCondition() *metav1.Condition {
 		ObservedGeneration: v.instance.Generation,
 	}
 
-	if v.instance.Spec.ReplicationState == ramendrv1alpha1.Primary {
+	if v.instance.Spec.ReplicationState == ramendrv1alpha2.Primary {
 		if len(v.volSyncPVCs) == 0 {
 			return nil
 		}
@@ -279,7 +279,7 @@ func (v *VRGInstance) buildDataProtectedCondition() *metav1.Condition {
 	protectedByVolSyncCount := 0
 
 	//nolint:nestif
-	if v.instance.Spec.ReplicationState == ramendrv1alpha1.Primary {
+	if v.instance.Spec.ReplicationState == ramendrv1alpha2.Primary {
 		for _, protectedPVC := range v.instance.Status.ProtectedPVCs {
 			if protectedPVC.ProtectedByVolSync {
 				protectedByVolSyncCount++

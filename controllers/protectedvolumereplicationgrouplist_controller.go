@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-logr/logr"
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 )
 
 // ProtectedVolumeReplicationGroupListReconciler reconciles a ProtectedVolumeReplicationGroupList object
@@ -123,8 +124,8 @@ func (s *ProtectedVolumeReplicationGroupListInstance) getNamespacesAndVrgPrefixe
 
 func (s *ProtectedVolumeReplicationGroupListInstance) getVrgContentsFromS3(prefixNamespaceVRG []string,
 	objectStore ObjectStorer,
-) ([]ramendrv1alpha1.VolumeReplicationGroup, error) {
-	vrgsAll := make([]ramendrv1alpha1.VolumeReplicationGroup, 0)
+) ([]ramendrv1alpha2.VolumeReplicationGroup, error) {
+	vrgsAll := make([]ramendrv1alpha2.VolumeReplicationGroup, 0)
 
 	const NoPrefixToRemove = ""
 	namespaceNamesList := getUniqueStringsFromList(prefixNamespaceVRG, ParseSingleSlash, NoPrefixToRemove)
@@ -156,12 +157,12 @@ func (s *ProtectedVolumeReplicationGroupListInstance) getVrgContentsFromS3(prefi
 	return vrgsAll, nil
 }
 
-func VrgTidyForList(vrg *ramendrv1alpha1.VolumeReplicationGroup) {
+func VrgTidyForList(vrg *ramendrv1alpha2.VolumeReplicationGroup) {
 	vrg.ObjectMeta = util.ObjectMetaEmbedded(&vrg.ObjectMeta)
 }
 
 func (s *ProtectedVolumeReplicationGroupListInstance) updateStatus(
-	vrgs []ramendrv1alpha1.VolumeReplicationGroup,
+	vrgs []ramendrv1alpha2.VolumeReplicationGroup,
 ) error {
 	// store all data in Status
 	s.instance.Status = &ramendrv1alpha1.ProtectedVolumeReplicationGroupListStatus{

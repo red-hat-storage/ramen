@@ -18,7 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	csiaddonsv1alpha1 "github.com/csi-addons/kubernetes-csi-addons/apis/csiaddons/v1alpha1"
-	rmn "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	viewv1beta1 "github.com/stolostron/multicloud-operators-foundation/pkg/apis/view/v1beta1"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
@@ -27,7 +27,7 @@ import (
 type ManagedClusterViewGetter interface {
 	GetVRGFromManagedCluster(
 		resourceName, resourceNamespace, managedCluster string,
-		annotations map[string]string) (*rmn.VolumeReplicationGroup, error)
+		annotations map[string]string) (*ramendrv1alpha2.VolumeReplicationGroup, error)
 
 	GetNFFromManagedCluster(
 		resourceName, resourceNamespace, managedCluster string,
@@ -49,7 +49,7 @@ type ManagedClusterViewGetterImpl struct {
 
 func (m ManagedClusterViewGetterImpl) GetVRGFromManagedCluster(resourceName, resourceNamespace, managedCluster string,
 	annotations map[string]string,
-) (*rmn.VolumeReplicationGroup, error) {
+) (*ramendrv1alpha2.VolumeReplicationGroup, error) {
 	logger := ctrl.Log.WithName("MCV").WithValues("resouceName", resourceName)
 	// get VRG and verify status through ManagedClusterView
 	mcvMeta := metav1.ObjectMeta{
@@ -64,7 +64,7 @@ func (m ManagedClusterViewGetterImpl) GetVRGFromManagedCluster(resourceName, res
 		Namespace: resourceNamespace,
 	}
 
-	vrg := &rmn.VolumeReplicationGroup{}
+	vrg := &ramendrv1alpha2.VolumeReplicationGroup{}
 
 	err := m.getManagedClusterResource(mcvMeta, mcvViewscope, vrg, logger)
 

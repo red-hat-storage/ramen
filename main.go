@@ -32,7 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
-
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	"github.com/ramendr/ramen/controllers"
 	rmnutil "github.com/ramendr/ramen/controllers/util"
 	// +kubebuilder:scaffold:imports
@@ -47,6 +47,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(ramendrv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(ramendrv1alpha2.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 

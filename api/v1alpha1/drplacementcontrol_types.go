@@ -7,6 +7,8 @@ import (
 	plrv1 "github.com/stolostron/multicloud-operators-placementrule/pkg/apis/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 )
 
 // DRAction which will be either a Failover or Relocate action
@@ -115,7 +117,7 @@ type DRPlacementControlSpec struct {
 	Action DRAction `json:"action,omitempty"`
 
 	// +optional
-	KubeObjectProtection *KubeObjectProtectionSpec `json:"kubeObjectProtection,omitempty"`
+	KubeObjectProtection *ramendrv1alpha2.KubeObjectProtectionSpec `json:"kubeObjectProtection,omitempty"`
 }
 
 // VRGResourceMeta represents the VRG resource.

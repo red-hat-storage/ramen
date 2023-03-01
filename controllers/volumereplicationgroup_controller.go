@@ -37,6 +37,7 @@ import (
 
 	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	rmnutil "github.com/ramendr/ramen/controllers/util"
 	"github.com/ramendr/ramen/controllers/volsync"
 )
@@ -87,7 +88,7 @@ func (r *VolumeReplicationGroupReconciler) SetupWithManager(
 			MaxConcurrentReconciles: getMaxConcurrentReconciles(r.Log),
 			RateLimiter:             rateLimiter,
 		}).
-		For(&ramendrv1alpha1.VolumeReplicationGroup{}).
+		For(&ramendrv1alpha2.VolumeReplicationGroup{}).
 		Watches(&source.Kind{Type: &corev1.PersistentVolumeClaim{}}, pvcMapFun, builder.WithPredicates(pvcPredicate)).
 		Owns(&volrep.VolumeReplication{}).
 		Owns(&volsyncv1alpha1.ReplicationDestination{}).
@@ -211,7 +212,7 @@ func updateEventDecision(oldPVC *corev1.PersistentVolumeClaim,
 func filterPVC(mgr manager.Manager, pvc *corev1.PersistentVolumeClaim, log logr.Logger) []reconcile.Request {
 	req := []reconcile.Request{}
 
-	var vrgs ramendrv1alpha1.VolumeReplicationGroupList
+	var vrgs ramendrv1alpha2.VolumeReplicationGroupList
 
 	listOptions := []client.ListOption{
 		client.InNamespace(pvc.Namespace),
@@ -292,7 +293,7 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 		reconciler:     r,
 		ctx:            ctx,
 		log:            log,
-		instance:       &ramendrv1alpha1.VolumeReplicationGroup{},
+		instance:       &ramendrv1alpha2.VolumeReplicationGroup{},
 		volRepPVCs:     []corev1.PersistentVolumeClaim{},
 		volSyncPVCs:    []corev1.PersistentVolumeClaim{},
 		replClassList:  &volrep.VolumeReplicationClassList{},
@@ -325,7 +326,7 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 		volSyncDestinationCopyMethodOrDefault(v.ramenConfig))
 
 	if v.instance.Status.ProtectedPVCs == nil {
-		v.instance.Status.ProtectedPVCs = []ramendrv1alpha1.ProtectedPVC{}
+		v.instance.Status.ProtectedPVCs = []ramendrv1alpha2.ProtectedPVC{}
 	}
 	// Save a copy of the instance status to be used for the VRG status update comparison
 	v.instance.Status.DeepCopyInto(&v.savedInstanceStatus)
@@ -353,8 +354,8 @@ type VRGInstance struct {
 	reconciler           *VolumeReplicationGroupReconciler
 	ctx                  context.Context
 	log                  logr.Logger
-	instance             *ramendrv1alpha1.VolumeReplicationGroup
-	savedInstanceStatus  ramendrv1alpha1.VolumeReplicationGroupStatus
+	instance             *ramendrv1alpha2.VolumeReplicationGroup
+	savedInstanceStatus  ramendrv1alpha2.VolumeReplicationGroupStatus
 	ramenConfig          *ramendrv1alpha1.RamenConfig
 	volRepPVCs           []corev1.PersistentVolumeClaim
 	volSyncPVCs          []corev1.PersistentVolumeClaim
@@ -462,7 +463,7 @@ func (v *VRGInstance) processVRGActions() (ctrl.Result, error) {
 	}
 
 	switch {
-	case v.instance.Spec.ReplicationState == ramendrv1alpha1.Primary:
+	case v.instance.Spec.ReplicationState == ramendrv1alpha2.Primary:
 		return v.processAsPrimary()
 	default: // Secondary, not primary and not deleted
 		return v.processAsSecondary()
@@ -470,8 +471,8 @@ func (v *VRGInstance) processVRGActions() (ctrl.Result, error) {
 }
 
 func (v *VRGInstance) validateVRGState() error {
-	if v.instance.Spec.ReplicationState != ramendrv1alpha1.Primary &&
-		v.instance.Spec.ReplicationState != ramendrv1alpha1.Secondary {
+	if v.instance.Spec.ReplicationState != ramendrv1alpha2.Primary &&
+		v.instance.Spec.ReplicationState != ramendrv1alpha2.Secondary {
 		err := fmt.Errorf("invalid or unknown replication state detected (deleted %v, desired replicationState %v)",
 			!v.instance.GetDeletionTimestamp().IsZero(),
 			v.instance.Spec.ReplicationState)
@@ -702,7 +703,7 @@ func (v *VRGInstance) processForDeletion() (ctrl.Result, error) {
 		return result, err
 	}
 
-	if v.instance.Spec.ReplicationState == ramendrv1alpha1.Primary {
+	if v.instance.Spec.ReplicationState == ramendrv1alpha2.Primary {
 		if err := v.deleteClusterDataInS3Stores(v.log); err != nil {
 			v.log.Info("Requeuing due to failure in deleting cluster data from S3 stores",
 				"errorValue", err)
@@ -903,9 +904,9 @@ func (v *VRGInstance) updateVRGStatus(updateConditions bool) error {
 func (v *VRGInstance) updateStatusState() {
 	dataReadyCondition := findCondition(v.instance.Status.Conditions, VRGConditionTypeDataReady)
 	if dataReadyCondition == nil {
-		if v.instance.Spec.ReplicationState == ramendrv1alpha1.Secondary &&
+		if v.instance.Spec.ReplicationState == ramendrv1alpha2.Secondary &&
 			len(v.instance.Spec.VolSync.RDSpec) > 0 {
-			v.instance.Status.State = ramendrv1alpha1.SecondaryState
+			v.instance.Status.State = ramendrv1alpha2.SecondaryState
 
 			return
 		}
@@ -932,7 +933,7 @@ func (v *VRGInstance) updateStatusState() {
 	// is Error, then mark Status.State as UnknownState instead
 	// of Primary or Secondary.
 	if dataReadyCondition.Reason == VRGConditionReasonError {
-		v.instance.Status.State = ramendrv1alpha1.UnknownState
+		v.instance.Status.State = ramendrv1alpha2.UnknownState
 
 		return
 	}
@@ -940,19 +941,19 @@ func (v *VRGInstance) updateStatusState() {
 	// If the state in spec is anything apart from
 	// primary or secondary, then explicitly set
 	// the Status.State to UnknownState.
-	if StatusState == ramendrv1alpha1.UnknownState {
+	if StatusState == ramendrv1alpha2.UnknownState {
 		v.instance.Status.State = StatusState
 	}
 }
 
-func getStatusStateFromSpecState(state ramendrv1alpha1.ReplicationState) ramendrv1alpha1.State {
+func getStatusStateFromSpecState(state ramendrv1alpha2.ReplicationState) ramendrv1alpha2.State {
 	switch state {
-	case ramendrv1alpha1.Primary:
-		return ramendrv1alpha1.PrimaryState
-	case ramendrv1alpha1.Secondary:
-		return ramendrv1alpha1.SecondaryState
+	case ramendrv1alpha2.Primary:
+		return ramendrv1alpha2.PrimaryState
+	case ramendrv1alpha2.Secondary:
+		return ramendrv1alpha2.SecondaryState
 	default:
-		return ramendrv1alpha1.UnknownState
+		return ramendrv1alpha2.UnknownState
 	}
 }
 
@@ -988,7 +989,7 @@ func (v *VRGInstance) updateVRGConditions() {
 }
 
 func (v *VRGInstance) vrgReadyStatus() *metav1.Condition {
-	if v.instance.Spec.ReplicationState == ramendrv1alpha1.Secondary {
+	if v.instance.Spec.ReplicationState == ramendrv1alpha2.Secondary {
 		v.log.Info("Marking VRG ready with replicating reason")
 
 		msg := "PVCs in the VolumeReplicationGroup group are replicating"

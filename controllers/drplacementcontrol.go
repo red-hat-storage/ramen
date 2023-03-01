@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	rmnutil "github.com/ramendr/ramen/controllers/util"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -52,7 +53,7 @@ type DRPCInstance struct {
 	volSyncDisabled      bool
 	userPlacementRule    *plrv1.PlacementRule
 	drpcPlacementRule    *plrv1.PlacementRule
-	vrgs                 map[string]*rmn.VolumeReplicationGroup
+	vrgs                 map[string]*ramendrv1alpha2.VolumeReplicationGroup
 	mwu                  rmnutil.MWUtil
 	metricsTimer         timerInstance
 }
@@ -223,7 +224,7 @@ func (d *DRPCInstance) isVRGAlreadyDeployedOnTargetCluster(targetCluster string)
 	return d.getCachedVRG(targetCluster) != nil
 }
 
-func (d *DRPCInstance) getCachedVRG(clusterName string) *rmn.VolumeReplicationGroup {
+func (d *DRPCInstance) getCachedVRG(clusterName string) *ramendrv1alpha2.VolumeReplicationGroup {
 	vrg, found := d.vrgs[clusterName]
 	if !found {
 		d.log.Info("VRG not found on cluster", "Name", clusterName)
@@ -929,13 +930,13 @@ func (d *DRPCInstance) createVRGManifestWorkAsPrimary(targetCluster string) (boo
 	}
 
 	if vrg != nil {
-		if vrg.Spec.ReplicationState == rmn.Primary {
+		if vrg.Spec.ReplicationState == ramendrv1alpha2.Primary {
 			d.log.Info("VRG MW already Primary on this cluster", "name", vrg.Name, "cluster", targetCluster)
 
 			return false, nil
 		}
 
-		_, err := d.updateVRGState(targetCluster, rmn.Primary)
+		_, err := d.updateVRGState(targetCluster, ramendrv1alpha2.Primary)
 		if err != nil {
 			d.log.Info(fmt.Sprintf("Failed to update VRG to primary on cluster %s. Err (%v)", targetCluster, err))
 
@@ -953,7 +954,7 @@ func (d *DRPCInstance) createVRGManifestWorkAsPrimary(targetCluster string) (boo
 	return true, nil
 }
 
-func (d *DRPCInstance) getVRGFromManifestWork(clusterName string) (*rmn.VolumeReplicationGroup, error) {
+func (d *DRPCInstance) getVRGFromManifestWork(clusterName string) (*ramendrv1alpha2.VolumeReplicationGroup, error) {
 	vrgMWName := d.mwu.BuildManifestWorkName(rmnutil.MWTypeVRG)
 
 	mw, err := d.mwu.FindManifestWork(vrgMWName, clusterName)
@@ -991,7 +992,7 @@ func (d *DRPCInstance) moveVRGToSecondaryEverywhere() bool {
 	failedCount := 0
 
 	for _, clusterName := range rmnutil.DrpolicyClusterNames(d.drPolicy) {
-		_, err := d.updateVRGState(clusterName, rmn.Secondary)
+		_, err := d.updateVRGState(clusterName, ramendrv1alpha2.Secondary)
 		if err != nil {
 			if errors.IsNotFound(err) {
 				continue
@@ -1112,7 +1113,7 @@ func (d *DRPCInstance) createVRGManifestWork(homeCluster string) error {
 	d.log.Info("Creating VRG ManifestWork",
 		"Last State:", d.getLastDRState(), "cluster", homeCluster)
 
-	vrg := d.generateVRG(rmn.Primary)
+	vrg := d.generateVRG(ramendrv1alpha2.Primary)
 	vrg.Spec.VolSync.Disabled = d.volSyncDisabled
 
 	annotations := make(map[string]string)
@@ -1131,18 +1132,18 @@ func (d *DRPCInstance) createVRGManifestWork(homeCluster string) error {
 	return nil
 }
 
-func vrgAction(drpcAction rmn.DRAction) rmn.VRGAction {
+func vrgAction(drpcAction rmn.DRAction) ramendrv1alpha2.VRGAction {
 	switch drpcAction {
 	case rmn.ActionFailover:
-		return rmn.VRGActionFailover
+		return ramendrv1alpha2.VRGActionFailover
 	case rmn.ActionRelocate:
-		return rmn.VRGActionRelocate
+		return ramendrv1alpha2.VRGActionRelocate
 	default:
 		return ""
 	}
 }
 
-func (d *DRPCInstance) setVRGAction(vrg *rmn.VolumeReplicationGroup) {
+func (d *DRPCInstance) setVRGAction(vrg *ramendrv1alpha2.VolumeReplicationGroup) {
 	action := vrgAction(d.instance.Spec.Action)
 	if action == "" {
 		return
@@ -1151,11 +1152,11 @@ func (d *DRPCInstance) setVRGAction(vrg *rmn.VolumeReplicationGroup) {
 	vrg.Spec.Action = action
 }
 
-func (d *DRPCInstance) generateVRG(repState rmn.ReplicationState) rmn.VolumeReplicationGroup {
-	vrg := rmn.VolumeReplicationGroup{
+func (d *DRPCInstance) generateVRG(repState ramendrv1alpha2.ReplicationState) ramendrv1alpha2.VolumeReplicationGroup {
+	vrg := ramendrv1alpha2.VolumeReplicationGroup{
 		TypeMeta:   metav1.TypeMeta{Kind: "VolumeReplicationGroup", APIVersion: "ramendr.openshift.io/v1alpha1"},
 		ObjectMeta: metav1.ObjectMeta{Name: d.instance.Name, Namespace: d.instance.Namespace},
-		Spec: rmn.VolumeReplicationGroupSpec{
+		Spec: ramendrv1alpha2.VolumeReplicationGroupSpec{
 			PVCSelector:          d.instance.Spec.PVCSelector,
 			ReplicationState:     repState,
 			S3Profiles:           rmnutil.DRPolicyS3Profiles(d.drPolicy, d.drClusters).List(),
@@ -1170,9 +1171,9 @@ func (d *DRPCInstance) generateVRG(repState rmn.ReplicationState) rmn.VolumeRepl
 	return vrg
 }
 
-func (d *DRPCInstance) generateVRGSpecAsync() *rmn.VRGAsyncSpec {
+func (d *DRPCInstance) generateVRGSpecAsync() *ramendrv1alpha2.VRGAsyncSpec {
 	if dRPolicySupportsRegional(d.drPolicy, d.drClusters) {
-		return &rmn.VRGAsyncSpec{
+		return &ramendrv1alpha2.VRGAsyncSpec{
 			ReplicationClassSelector:    d.drPolicy.Spec.ReplicationClassSelector,
 			VolumeSnapshotClassSelector: d.drPolicy.Spec.VolumeSnapshotClassSelector,
 			SchedulingInterval:          d.drPolicy.Spec.SchedulingInterval,
@@ -1182,9 +1183,9 @@ func (d *DRPCInstance) generateVRGSpecAsync() *rmn.VRGAsyncSpec {
 	return nil
 }
 
-func (d *DRPCInstance) generateVRGSpecSync() *rmn.VRGSyncSpec {
+func (d *DRPCInstance) generateVRGSpecSync() *ramendrv1alpha2.VRGSyncSpec {
 	if supports, _ := dRPolicySupportsMetro(d.drPolicy, d.drClusters); supports {
-		return &rmn.VRGSyncSpec{}
+		return &ramendrv1alpha2.VRGSyncSpec{}
 	}
 
 	return nil
@@ -1283,12 +1284,12 @@ func (d *DRPCInstance) ensureNamespaceExistsOnManagedCluster(homeCluster string)
 	return nil
 }
 
-func (d *DRPCInstance) isVRGPrimary(vrg *rmn.VolumeReplicationGroup) bool {
-	return (vrg.Spec.ReplicationState == rmn.Primary)
+func (d *DRPCInstance) isVRGPrimary(vrg *ramendrv1alpha2.VolumeReplicationGroup) bool {
+	return (vrg.Spec.ReplicationState == ramendrv1alpha2.Primary)
 }
 
-func (d *DRPCInstance) isVRGSecondary(vrg *rmn.VolumeReplicationGroup) bool {
-	return (vrg.Spec.ReplicationState == rmn.Secondary)
+func (d *DRPCInstance) isVRGSecondary(vrg *ramendrv1alpha2.VolumeReplicationGroup) bool {
+	return (vrg.Spec.ReplicationState == ramendrv1alpha2.Secondary)
 }
 
 func (d *DRPCInstance) checkPVsHaveBeenRestored(homeCluster string) (bool, error) {
@@ -1361,7 +1362,7 @@ func (d *DRPCInstance) EnsureCleanup(clusterToSkip string) error {
 				continue
 			}
 
-			justUpdated, err := d.updateVRGState(clusterName, rmn.Secondary)
+			justUpdated, err := d.updateVRGState(clusterName, ramendrv1alpha2.Secondary)
 			if err != nil {
 				peersReady = false
 
@@ -1449,7 +1450,7 @@ func (d *DRPCInstance) ensureVRGManifestWorkOnClusterDeleted(clusterName string)
 
 	// If .spec.ReplicateSpec has not already been updated to secondary, then update it.
 	// If we do update it to secondary, then we have to wait for the MW to be applied
-	updated, err := d.updateVRGState(clusterName, rmn.Secondary)
+	updated, err := d.updateVRGState(clusterName, ramendrv1alpha2.Secondary)
 	if err != nil || updated {
 		return !done, err
 	}
@@ -1514,7 +1515,7 @@ func (d *DRPCInstance) ensureVRGIsSecondaryOnCluster(clusterName string) bool {
 		return false
 	}
 
-	if vrg.Status.State != rmn.SecondaryState {
+	if vrg.Status.State != ramendrv1alpha2.SecondaryState {
 		d.log.Info(fmt.Sprintf("VRG on %s has not transitioned to secondary yet. Spec-State/Status-State %s/%s",
 			clusterName, vrg.Spec.ReplicationState, vrg.Status.State))
 
@@ -1626,7 +1627,7 @@ func (d *DRPCInstance) ensureVRGDeleted(clusterName string) bool {
 	return false
 }
 
-func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationState) (bool, error) {
+func (d *DRPCInstance) updateVRGState(clusterName string, state ramendrv1alpha2.ReplicationState) (bool, error) {
 	d.log.Info(fmt.Sprintf("Updating VRG ReplicationState to secondary for cluster %s", clusterName))
 
 	vrg, err := d.getVRGFromManifestWork(clusterName)
@@ -1643,7 +1644,7 @@ func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationS
 	}
 
 	vrg.Spec.ReplicationState = state
-	if state == rmn.Secondary {
+	if state == ramendrv1alpha2.Secondary {
 		// Turn off the final sync flags
 		vrg.Spec.PrepareForFinalSync = false
 		vrg.Spec.RunFinalSync = false
@@ -1721,13 +1722,15 @@ func (d *DRPCInstance) updateVRGToRunFinalSync(clusterName string) error {
 	return nil
 }
 
-func (d *DRPCInstance) extractVRGFromManifestWork(mw *ocmworkv1.ManifestWork) (*rmn.VolumeReplicationGroup, error) {
+func (d *DRPCInstance) extractVRGFromManifestWork(
+	mw *ocmworkv1.ManifestWork,
+) (*ramendrv1alpha2.VolumeReplicationGroup, error) {
 	if len(mw.Spec.Workload.Manifests) == 0 {
 		return nil, fmt.Errorf("invalid VRG ManifestWork for type: %s", mw.Name)
 	}
 
 	vrgClientManifest := &mw.Spec.Workload.Manifests[0]
-	vrg := &rmn.VolumeReplicationGroup{}
+	vrg := &ramendrv1alpha2.VolumeReplicationGroup{}
 
 	err := yaml.Unmarshal(vrgClientManifest.RawExtension.Raw, &vrg)
 	if err != nil {
@@ -1737,7 +1740,7 @@ func (d *DRPCInstance) extractVRGFromManifestWork(mw *ocmworkv1.ManifestWork) (*
 	return vrg, nil
 }
 
-func (d *DRPCInstance) updateManifestWork(clusterName string, vrg *rmn.VolumeReplicationGroup) error {
+func (d *DRPCInstance) updateManifestWork(clusterName string, vrg *ramendrv1alpha2.VolumeReplicationGroup) error {
 	vrgMWName := d.mwu.BuildManifestWorkName(rmnutil.MWTypeVRG)
 
 	mw, err := d.mwu.FindManifestWork(vrgMWName, clusterName)

@@ -5,6 +5,8 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 )
 
 // ProtectedVolumeReplicationGroupListSpec defines the desired state of ProtectedVolumeReplicationGroupList
@@ -22,7 +24,7 @@ type ProtectedVolumeReplicationGroupListStatus struct {
 
 	// Items is a list of VolumeReplicationGroup objects represented in
 	// the specified store when it was last queried.
-	Items []VolumeReplicationGroup `json:"items,omitempty"`
+	Items []ramendrv1alpha2.VolumeReplicationGroup `json:"items,omitempty"`
 }
 
 //+kubebuilder:object:root=true

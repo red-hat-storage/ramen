@@ -26,7 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	csiaddonsv1alpha1 "github.com/csi-addons/kubernetes-csi-addons/apis/csiaddons/v1alpha1"
-	rmn "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 )
 
 const (
@@ -106,7 +106,7 @@ func IsManifestInAppliedState(mw *ocmworkv1.ManifestWork) bool {
 
 func (mwu *MWUtil) CreateOrUpdateVRGManifestWork(
 	name, namespace, homeCluster string,
-	vrg rmn.VolumeReplicationGroup, annotations map[string]string,
+	vrg ramendrv1alpha2.VolumeReplicationGroup, annotations map[string]string,
 ) error {
 	mwu.Log.Info(fmt.Sprintf("Create or Update manifestwork %s:%s:%s:%+v",
 		name, namespace, homeCluster, vrg))
@@ -120,7 +120,7 @@ func (mwu *MWUtil) CreateOrUpdateVRGManifestWork(
 }
 
 func (mwu *MWUtil) generateVRGManifestWork(name, namespace, homeCluster string,
-	vrg rmn.VolumeReplicationGroup, annotations map[string]string,
+	vrg ramendrv1alpha2.VolumeReplicationGroup, annotations map[string]string,
 ) (*ocmworkv1.ManifestWork, error) {
 	vrgClientManifest, err := mwu.generateVRGManifest(vrg)
 	if err != nil {
@@ -140,7 +140,7 @@ func (mwu *MWUtil) generateVRGManifestWork(name, namespace, homeCluster string,
 		manifests, annotations), nil
 }
 
-func (mwu *MWUtil) generateVRGManifest(vrg rmn.VolumeReplicationGroup) (*ocmworkv1.Manifest, error) {
+func (mwu *MWUtil) generateVRGManifest(vrg ramendrv1alpha2.VolumeReplicationGroup) (*ocmworkv1.Manifest, error) {
 	return mwu.GenerateManifest(vrg)
 }
 

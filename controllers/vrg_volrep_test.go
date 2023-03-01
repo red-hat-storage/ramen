@@ -15,6 +15,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	vrgController "github.com/ramendr/ramen/controllers"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -53,7 +54,7 @@ var _ = Describe("VolumeReplicationGroupVolRepController", func() {
 		Expect(condition.Status).To(Equal(status))
 		Expect(condition.Reason).To(Equal(reason))
 	}
-	var vrg *ramendrv1alpha1.VolumeReplicationGroup
+	var vrg *ramendrv1alpha2.VolumeReplicationGroup
 	vrgConditionExpect := func(typ string) *metav1.Condition {
 		return conditionExpect(vrg.Status.Conditions, typ)
 	}
@@ -71,12 +72,12 @@ var _ = Describe("VolumeReplicationGroupVolRepController", func() {
 	var dataReadyCondition *metav1.Condition
 	When("ReplicationState is invalid", func() {
 		It("should set DataReady status=False reason=Error", func() {
-			vrg = &ramendrv1alpha1.VolumeReplicationGroup{
+			vrg = &ramendrv1alpha2.VolumeReplicationGroup{
 				ObjectMeta: metav1.ObjectMeta{
 					Namespace: "default",
 					Name:      "asdf",
 				},
-				Spec: ramendrv1alpha1.VolumeReplicationGroupSpec{
+				Spec: ramendrv1alpha2.VolumeReplicationGroupSpec{
 					PVCSelector:      metav1.LabelSelector{},
 					ReplicationState: "invalid",
 					S3Profiles:       []string{},
@@ -116,7 +117,7 @@ var _ = Describe("VolumeReplicationGroupVolRepController", func() {
 	})
 	When("ReplicationState is primary and sync is enabled, but s3 profiles are absent", func() {
 		It("should set ClusterDataReady status=False reason=Error", func() {
-			vrg.Spec.Sync = &ramendrv1alpha1.VRGSyncSpec{}
+			vrg.Spec.Sync = &ramendrv1alpha2.VRGSyncSpec{}
 			Expect(k8sClient.Update(context.TODO(), vrg)).To(Succeed())
 			var clusterDataReadyCondition *metav1.Condition
 			Eventually(func() metav1.ConditionStatus {
@@ -281,7 +282,7 @@ var _ = Describe("VolumeReplicationGroupVolRepController", func() {
 
 			By("Ensuring VRG is not deleted till VRs are present")
 			Consistently(func() bool {
-				vrg := &ramendrv1alpha1.VolumeReplicationGroup{}
+				vrg := &ramendrv1alpha2.VolumeReplicationGroup{}
 				err := apiReader.Get(context.TODO(), vrgVRDeleteEnsureTestCase.vrgNamespacedName(), vrg)
 
 				return err == nil
@@ -293,7 +294,7 @@ var _ = Describe("VolumeReplicationGroupVolRepController", func() {
 
 			By("Ensuring VRG is deleted eventually as a result")
 			Eventually(func() bool {
-				vrg := &ramendrv1alpha1.VolumeReplicationGroup{}
+				vrg := &ramendrv1alpha2.VolumeReplicationGroup{}
 				err := apiReader.Get(context.TODO(), vrgVRDeleteEnsureTestCase.vrgNamespacedName(), vrg)
 
 				return errors.IsNotFound(err)
@@ -965,7 +966,7 @@ func (v *vrgTest) createVRG() {
 	schedulingInterval := "1h"
 	replicationClassLabels := map[string]string{"protection": "ramen"}
 
-	vrg := &ramendrv1alpha1.VolumeReplicationGroup{
+	vrg := &ramendrv1alpha2.VolumeReplicationGroup{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: ramendrv1alpha1.GroupVersion.String(),
 			Kind:       "VolumeReplicationGroup",
@@ -974,14 +975,14 @@ func (v *vrgTest) createVRG() {
 			Name:      v.vrgName,
 			Namespace: v.namespace,
 		},
-		Spec: ramendrv1alpha1.VolumeReplicationGroupSpec{
+		Spec: ramendrv1alpha2.VolumeReplicationGroupSpec{
 			PVCSelector:      metav1.LabelSelector{MatchLabels: v.pvcLabels},
 			ReplicationState: "primary",
-			Async: &ramendrv1alpha1.VRGAsyncSpec{
+			Async: &ramendrv1alpha2.VRGAsyncSpec{
 				SchedulingInterval:       schedulingInterval,
 				ReplicationClassSelector: metav1.LabelSelector{MatchLabels: replicationClassLabels},
 			},
-			VolSync: ramendrv1alpha1.VolSyncSpec{
+			VolSync: ramendrv1alpha2.VolSyncSpec{
 				Disabled: true,
 			},
 			S3Profiles: v.template.s3Profiles,
@@ -1097,8 +1098,8 @@ func (v *vrgTest) getPVC(pvcName string) *corev1.PersistentVolumeClaim {
 	return pvc
 }
 
-func (v *vrgTest) getVRG() *ramendrv1alpha1.VolumeReplicationGroup {
-	vrg := &ramendrv1alpha1.VolumeReplicationGroup{}
+func (v *vrgTest) getVRG() *ramendrv1alpha2.VolumeReplicationGroup {
+	vrg := &ramendrv1alpha2.VolumeReplicationGroup{}
 	err := apiReader.Get(context.TODO(), v.vrgNamespacedName(), vrg)
 	Expect(err).NotTo(HaveOccurred(),
 		"failed to get VRG %s", v.vrgName)
@@ -1106,7 +1107,7 @@ func (v *vrgTest) getVRG() *ramendrv1alpha1.VolumeReplicationGroup {
 	return vrg
 }
 
-func (v *vrgTest) isAnyPVCProtectedByVolSync(vrg *ramendrv1alpha1.VolumeReplicationGroup) bool {
+func (v *vrgTest) isAnyPVCProtectedByVolSync(vrg *ramendrv1alpha2.VolumeReplicationGroup) bool {
 	for _, protectedPVC := range vrg.Status.ProtectedPVCs {
 		if protectedPVC.ProtectedByVolSync {
 			return true
@@ -1129,10 +1130,10 @@ func (v *vrgTest) verifyVRGStatusExpectation(expectedStatus bool) {
 			// reasons for success can be different for Primary and
 			// secondary. Validate that as well.
 			switch vrg.Spec.ReplicationState {
-			case ramendrv1alpha1.Primary:
+			case ramendrv1alpha2.Primary:
 				return dataReadyCondition.Status == metav1.ConditionTrue && dataReadyCondition.Reason ==
 					vrgController.VRGConditionReasonReady
-			case ramendrv1alpha1.Secondary:
+			case ramendrv1alpha2.Secondary:
 				return dataReadyCondition.Status == metav1.ConditionTrue && dataReadyCondition.Reason ==
 					vrgController.VRGConditionReasonReplicating
 			}
@@ -1217,7 +1218,7 @@ func (v *vrgTest) verifyCachedUploadError() {
 }
 
 func (v *vrgTest) clusterDataProtectedWait(status metav1.ConditionStatus,
-) (vrg *ramendrv1alpha1.VolumeReplicationGroup) {
+) (vrg *ramendrv1alpha2.VolumeReplicationGroup) {
 	Eventually(func() metav1.ConditionStatus {
 		vrg = v.getVRG()
 		clusterDataProtectedCondition := meta.FindStatusCondition(
@@ -1232,8 +1233,8 @@ func (v *vrgTest) clusterDataProtectedWait(status metav1.ConditionStatus,
 	return
 }
 
-func (v *vrgTest) vrgDownloadAndValidate(vrgK8s *ramendrv1alpha1.VolumeReplicationGroup) {
-	vrgs := []ramendrv1alpha1.VolumeReplicationGroup{}
+func (v *vrgTest) vrgDownloadAndValidate(vrgK8s *ramendrv1alpha2.VolumeReplicationGroup) {
+	vrgs := []ramendrv1alpha2.VolumeReplicationGroup{}
 	Expect(vrgController.DownloadTypedObjects(*vrgObjectStorer, v.s3KeyPrefix(), &vrgs)).To(Succeed())
 	Expect(vrgs).To(HaveLen(1))
 	vrgS3 := &vrgs[0]
@@ -1252,7 +1253,7 @@ func (v *vrgTest) vrgDownloadAndValidate(vrgK8s *ramendrv1alpha1.VolumeReplicati
 	// Expect(vrgS3).To(Equal(vrgK8s)) TODO re-enable: fails on github despite matching VRGs output
 }
 
-func (v *vrgTest) kubeObjectProtectionValidate() *ramendrv1alpha1.VolumeReplicationGroup {
+func (v *vrgTest) kubeObjectProtectionValidate() *ramendrv1alpha2.VolumeReplicationGroup {
 	vrg := v.clusterDataProtectedWait(metav1.ConditionTrue)
 	v.vrgDownloadAndValidate(vrg)
 
@@ -1261,7 +1262,7 @@ func (v *vrgTest) kubeObjectProtectionValidate() *ramendrv1alpha1.VolumeReplicat
 
 func kubeObjectProtectionValidate(tests []*vrgTest) {
 	protectedVrgList := protectedVrgListCreateAndStatusWait("protectedvrglist-vrg-"+tests[0].uniqueID, vrgS3ProfileNumber)
-	vrgs := make([]ramendrv1alpha1.VolumeReplicationGroup, len(tests))
+	vrgs := make([]ramendrv1alpha2.VolumeReplicationGroup, len(tests))
 
 	for i, v := range tests {
 		vrg := v.kubeObjectProtectionValidate()
@@ -1484,7 +1485,7 @@ func (v *vrgTest) waitForVolRepPromotion(vrNamespacedName types.NamespacedName, 
 		// as of now name of VolumeReplication resource created by the VolumeReplicationGroup
 		// is same as the pvc that it replicates. When that changes this has to be changed to
 		// use the right name to get the appropriate protected PVC condition from VRG status.
-		var protectedPVC *ramendrv1alpha1.ProtectedPVC
+		var protectedPVC *ramendrv1alpha2.ProtectedPVC
 		for index := range vrg.Status.ProtectedPVCs {
 			curPVC := &vrg.Status.ProtectedPVCs[index]
 			if curPVC.Name == updatedVolRep.Name {
@@ -1506,21 +1507,21 @@ func (v *vrgTest) waitForVolRepPromotion(vrNamespacedName types.NamespacedName, 
 	v.verifyVRGStatusExpectation(vrgready)
 }
 
-func (v *vrgTest) checkProtectedPVCSuccess(vrg *ramendrv1alpha1.VolumeReplicationGroup,
-	protectedPVC *ramendrv1alpha1.ProtectedPVC,
+func (v *vrgTest) checkProtectedPVCSuccess(vrg *ramendrv1alpha2.VolumeReplicationGroup,
+	protectedPVC *ramendrv1alpha2.ProtectedPVC,
 ) bool {
 	success := false
 	dataReadyCondition := meta.FindStatusCondition(protectedPVC.Conditions,
 		vrgController.VRGConditionTypeDataReady)
 
 	switch {
-	case vrg.Spec.ReplicationState == ramendrv1alpha1.Primary:
+	case vrg.Spec.ReplicationState == ramendrv1alpha2.Primary:
 		if dataReadyCondition.Status == metav1.ConditionTrue && dataReadyCondition.Reason ==
 			vrgController.VRGConditionReasonReady {
 			success = true
 		}
 
-	case vrg.Spec.ReplicationState == ramendrv1alpha1.Secondary:
+	case vrg.Spec.ReplicationState == ramendrv1alpha2.Secondary:
 		if dataReadyCondition.Status == metav1.ConditionTrue && dataReadyCondition.Reason ==
 			vrgController.VRGConditionReasonReplicating {
 			success = true

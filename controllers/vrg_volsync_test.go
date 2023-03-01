@@ -18,7 +18,7 @@ import (
 
 	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
 	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
-	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	"github.com/ramendr/ramen/controllers/volsync"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -61,25 +61,25 @@ var _ = Describe("VolumeReplicationGroupVolSyncController", func() {
 			"ramentest": "backmeup",
 		}
 
-		var testVsrg *ramendrv1alpha1.VolumeReplicationGroup
+		var testVsrg *ramendrv1alpha2.VolumeReplicationGroup
 
 		Context("When VRG created on primary", func() {
 			JustBeforeEach(func() {
-				testVsrg = &ramendrv1alpha1.VolumeReplicationGroup{
+				testVsrg = &ramendrv1alpha2.VolumeReplicationGroup{
 					ObjectMeta: metav1.ObjectMeta{
 						GenerateName: "test-vrg-east-",
 						Namespace:    testNamespace.GetName(),
 					},
-					Spec: ramendrv1alpha1.VolumeReplicationGroupSpec{
-						ReplicationState: ramendrv1alpha1.Primary,
-						Async: &ramendrv1alpha1.VRGAsyncSpec{
+					Spec: ramendrv1alpha2.VolumeReplicationGroupSpec{
+						ReplicationState: ramendrv1alpha2.Primary,
+						Async: &ramendrv1alpha2.VRGAsyncSpec{
 							SchedulingInterval: "1h",
 						},
 						PVCSelector: metav1.LabelSelector{
 							MatchLabels: testMatchLabels,
 						},
 						S3Profiles: []string{s3Profiles[0].S3ProfileName},
-						VolSync:    ramendrv1alpha1.VolSyncSpec{},
+						VolSync:    ramendrv1alpha2.VolSyncSpec{},
 					},
 				}
 
@@ -191,7 +191,7 @@ var _ = Describe("VolumeReplicationGroupVolSyncController", func() {
 			"ramentest": "backmeup",
 		}
 
-		var testVrg *ramendrv1alpha1.VolumeReplicationGroup
+		var testVrg *ramendrv1alpha2.VolumeReplicationGroup
 
 		testAccessModes := []corev1.PersistentVolumeAccessMode{
 			corev1.ReadWriteOnce,
@@ -199,14 +199,14 @@ var _ = Describe("VolumeReplicationGroupVolSyncController", func() {
 
 		Context("When VRG created on secondary", func() {
 			JustBeforeEach(func() {
-				testVrg = &ramendrv1alpha1.VolumeReplicationGroup{
+				testVrg = &ramendrv1alpha2.VolumeReplicationGroup{
 					ObjectMeta: metav1.ObjectMeta{
 						GenerateName: "test-vrg-east-",
 						Namespace:    testNamespace.GetName(),
 					},
-					Spec: ramendrv1alpha1.VolumeReplicationGroupSpec{
-						ReplicationState: ramendrv1alpha1.Secondary,
-						Async: &ramendrv1alpha1.VRGAsyncSpec{
+					Spec: ramendrv1alpha2.VolumeReplicationGroupSpec{
+						ReplicationState: ramendrv1alpha2.Secondary,
+						Async: &ramendrv1alpha2.VRGAsyncSpec{
 							SchedulingInterval: "1h",
 						},
 						PVCSelector: metav1.LabelSelector{
@@ -249,9 +249,9 @@ var _ = Describe("VolumeReplicationGroupVolSyncController", func() {
 				JustBeforeEach(func() {
 					// Update the vrg spec with some RDSpec entries
 					Expect(k8sClient.Get(testCtx, client.ObjectKeyFromObject(testVrg), testVrg)).To(Succeed())
-					testVrg.Spec.VolSync.RDSpec = []ramendrv1alpha1.VolSyncReplicationDestinationSpec{
+					testVrg.Spec.VolSync.RDSpec = []ramendrv1alpha2.VolSyncReplicationDestinationSpec{
 						{
-							ProtectedPVC: ramendrv1alpha1.ProtectedPVC{
+							ProtectedPVC: ramendrv1alpha2.ProtectedPVC{
 								Name:               "testingpvc-a",
 								ProtectedByVolSync: true,
 								StorageClassName:   &storageClassName,
@@ -261,7 +261,7 @@ var _ = Describe("VolumeReplicationGroupVolSyncController", func() {
 							},
 						},
 						{
-							ProtectedPVC: ramendrv1alpha1.ProtectedPVC{
+							ProtectedPVC: ramendrv1alpha2.ProtectedPVC{
 								Name:               "testingpvc-b",
 								ProtectedByVolSync: true,
 								StorageClassName:   &storageClassName,

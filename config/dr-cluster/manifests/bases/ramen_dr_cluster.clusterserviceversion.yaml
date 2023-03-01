@@ -16,7 +16,7 @@ spec:
       displayName: Volume Replication Group
       kind: VolumeReplicationGroup
       name: volumereplicationgroups.ramendr.openshift.io
-      version: v1alpha1
+      version: v1alpha2
   description: Ramen is a disaster-recovery orchestrator for stateful applications
     across a set of peer kubernetes clusters which are deployed and managed using
     open-cluster-management (OCM) and provides cloud-native interfaces to orchestrate

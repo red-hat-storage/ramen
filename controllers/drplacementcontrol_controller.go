@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	rmnutil "github.com/ramendr/ramen/controllers/util"
 	"github.com/ramendr/ramen/controllers/volsync"
 )
@@ -852,8 +853,8 @@ func (r *DRPlacementControlReconciler) clonePlacementRule(ctx context.Context,
 
 func (r *DRPlacementControlReconciler) getVRGsFromManagedClusters(drpc *rmn.DRPlacementControl,
 	drPolicy *rmn.DRPolicy, log logr.Logger,
-) (map[string]*rmn.VolumeReplicationGroup, error) {
-	vrgs := map[string]*rmn.VolumeReplicationGroup{}
+) (map[string]*ramendrv1alpha2.VolumeReplicationGroup, error) {
+	vrgs := map[string]*ramendrv1alpha2.VolumeReplicationGroup{}
 
 	annotations := make(map[string]string)
 

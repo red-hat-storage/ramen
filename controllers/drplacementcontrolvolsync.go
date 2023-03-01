@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	rmnutil "github.com/ramendr/ramen/controllers/util"
 	"github.com/ramendr/ramen/controllers/volsync"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -133,8 +134,8 @@ func (d *DRPCInstance) ensureVolSyncReplicationDestination(srcCluster string) er
 	return nil
 }
 
-func (d *DRPCInstance) containsMismatchVolSyncPVCs(srcVRG *rmn.VolumeReplicationGroup,
-	dstVRG *rmn.VolumeReplicationGroup,
+func (d *DRPCInstance) containsMismatchVolSyncPVCs(srcVRG *ramendrv1alpha2.VolumeReplicationGroup,
+	dstVRG *ramendrv1alpha2.VolumeReplicationGroup,
 ) bool {
 	for _, protectedPVC := range srcVRG.Status.ProtectedPVCs {
 		if !protectedPVC.ProtectedByVolSync {
@@ -160,8 +161,8 @@ func (d *DRPCInstance) containsMismatchVolSyncPVCs(srcVRG *rmn.VolumeReplication
 	return false
 }
 
-func (d *DRPCInstance) updateDestinationVRG(clusterName string, srcVRG *rmn.VolumeReplicationGroup,
-	dstVRG *rmn.VolumeReplicationGroup,
+func (d *DRPCInstance) updateDestinationVRG(clusterName string, srcVRG *ramendrv1alpha2.VolumeReplicationGroup,
+	dstVRG *ramendrv1alpha2.VolumeReplicationGroup,
 ) error {
 	// clear RDSpec
 	dstVRG.Spec.VolSync.RDSpec = nil
@@ -171,7 +172,7 @@ func (d *DRPCInstance) updateDestinationVRG(clusterName string, srcVRG *rmn.Volu
 			continue
 		}
 
-		rdSpec := rmn.VolSyncReplicationDestinationSpec{
+		rdSpec := ramendrv1alpha2.VolSyncReplicationDestinationSpec{
 			ProtectedPVC: protectedPVC,
 		}
 
@@ -233,7 +234,7 @@ func (d *DRPCInstance) getVolSyncPVCCount(homeCluster string) int {
 	return pvcCount
 }
 
-func (d *DRPCInstance) updateVRGSpec(clusterName string, tgtVRG *rmn.VolumeReplicationGroup) error {
+func (d *DRPCInstance) updateVRGSpec(clusterName string, tgtVRG *ramendrv1alpha2.VolumeReplicationGroup) error {
 	vrgMWName := d.mwu.BuildManifestWorkName(rmnutil.MWTypeVRG)
 	d.log.Info(fmt.Sprintf("Updating VRG ownedby MW %s for cluster %s", vrgMWName, clusterName))
 
@@ -256,7 +257,7 @@ func (d *DRPCInstance) updateVRGSpec(clusterName string, tgtVRG *rmn.VolumeRepli
 		return err
 	}
 
-	if vrg.Spec.ReplicationState != rmn.Secondary {
+	if vrg.Spec.ReplicationState != ramendrv1alpha2.Secondary {
 		d.log.Info(fmt.Sprintf("VRG %s is not secondary on this cluster %s", vrg.Name, mw.Namespace))
 
 		return fmt.Errorf("failed to update MW due to wrong VRG state (%v) for the request",
@@ -302,7 +303,7 @@ func (d *DRPCInstance) createVolSyncDestManifestWork(srcCluster string) error {
 				d.instance.Namespace, dstCluster)
 		}
 
-		vrg := d.generateVRG(rmn.Secondary)
+		vrg := d.generateVRG(ramendrv1alpha2.Secondary)
 
 		annotations := make(map[string]string)
 
@@ -353,7 +354,7 @@ func (d *DRPCInstance) ResetVolSyncRDOnPrimary(clusterName string) error {
 		return err
 	}
 
-	if vrg.Spec.ReplicationState != rmn.Primary {
+	if vrg.Spec.ReplicationState != ramendrv1alpha2.Primary {
 		d.log.Info(fmt.Sprintf("VRG %s not primary on this cluster %s", vrg.Name, mw.Namespace))
 
 		return fmt.Errorf(fmt.Sprintf("VRG %s not primary on this cluster %s", vrg.Name, mw.Namespace))

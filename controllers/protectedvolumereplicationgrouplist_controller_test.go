@@ -10,6 +10,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	"github.com/ramendr/ramen/controllers"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -85,20 +86,20 @@ func protectedVrgListDeleteAndNotFoundWait(protectedVrgList *ramen.ProtectedVolu
 }
 
 func protectedVrgListExpectIncludeOnly(protectedVrgList *ramen.ProtectedVolumeReplicationGroupList,
-	vrgsExpected []ramen.VolumeReplicationGroup,
+	vrgsExpected []ramendrv1alpha2.VolumeReplicationGroup,
 ) {
 	vrgsStatusStateUpdate(protectedVrgList.Status.Items, vrgsExpected)
 	Expect(protectedVrgList.Status.Items).To(ConsistOf(vrgsExpected))
 }
 
 func protectedVrgListExpectInclude(protectedVrgList *ramen.ProtectedVolumeReplicationGroupList,
-	vrgsExpected []ramen.VolumeReplicationGroup,
+	vrgsExpected []ramendrv1alpha2.VolumeReplicationGroup,
 ) {
 	vrgsStatusStateUpdate(protectedVrgList.Status.Items, vrgsExpected)
 	Expect(protectedVrgList.Status.Items).To(ContainElements(vrgsExpected))
 }
 
-func vrgsStatusStateUpdate(vrgsS3, vrgsK8s []ramen.VolumeReplicationGroup) {
+func vrgsStatusStateUpdate(vrgsS3, vrgsK8s []ramendrv1alpha2.VolumeReplicationGroup) {
 	for i := range vrgsS3 {
 		vrgS3 := &vrgsS3[i]
 
@@ -114,11 +115,11 @@ func vrgsStatusStateUpdate(vrgsS3, vrgsK8s []ramen.VolumeReplicationGroup) {
 	}
 }
 
-func vrgStatusStateUpdate(vrgS3, vrgK8s *ramen.VolumeReplicationGroup) {
+func vrgStatusStateUpdate(vrgS3, vrgK8s *ramendrv1alpha2.VolumeReplicationGroup) {
 	// vrg is uploaded to s3 store before status is updated
-	if (vrgS3.Status.State == "" || vrgS3.Status.State == ramen.UnknownState) &&
-		vrgK8s.Status.State == ramen.PrimaryState {
-		vrgS3.Status.State = ramen.PrimaryState
+	if (vrgS3.Status.State == "" || vrgS3.Status.State == ramendrv1alpha2.UnknownState) &&
+		vrgK8s.Status.State == ramendrv1alpha2.PrimaryState {
+		vrgS3.Status.State = ramendrv1alpha2.PrimaryState
 		vrgS3.ResourceVersion = vrgK8s.ResourceVersion
 		vrgS3.Status.LastUpdateTime = vrgK8s.Status.LastUpdateTime
 	}
@@ -130,8 +131,8 @@ var _ = Describe("ProtectedVolumeReplicationGroupListController", func() {
 		name0      = namePrefix + "0"
 		name1      = namePrefix + "1"
 	)
-	vrg := func(namespaceName, objectName string) ramen.VolumeReplicationGroup {
-		return ramen.VolumeReplicationGroup{
+	vrg := func(namespaceName, objectName string) ramendrv1alpha2.VolumeReplicationGroup {
+		return ramendrv1alpha2.VolumeReplicationGroup{
 			TypeMeta: metav1.TypeMeta{
 				APIVersion: ramen.GroupVersion.String(),
 				Kind:       "VolumeReplicationGroup",
@@ -140,15 +141,15 @@ var _ = Describe("ProtectedVolumeReplicationGroupListController", func() {
 				Namespace: namespaceName,
 				Name:      objectName,
 			},
-			Spec: ramen.VolumeReplicationGroupSpec{
+			Spec: ramendrv1alpha2.VolumeReplicationGroupSpec{
 				PVCSelector:      metav1.LabelSelector{},
-				ReplicationState: ramen.Primary,
+				ReplicationState: ramendrv1alpha2.Primary,
 				S3Profiles:       []string{},
-				Sync:             &ramen.VRGSyncSpec{},
+				Sync:             &ramendrv1alpha2.VRGSyncSpec{},
 			},
 		}
 	}
-	vrgs := [...]ramen.VolumeReplicationGroup{
+	vrgs := [...]ramendrv1alpha2.VolumeReplicationGroup{
 		vrg(name0, name0),
 		vrg(name1, name1),
 		vrg(name1, name0),
@@ -171,7 +172,7 @@ var _ = Describe("ProtectedVolumeReplicationGroupListController", func() {
 		Expect(controllers.VrgObjectUnprotect(*objectStorer, vrgs[number])).To(Succeed())
 		delete(vrgNumbersExpected, number)
 	}
-	vrgsExpected := func() (vrgsExpected []ramen.VolumeReplicationGroup) {
+	vrgsExpected := func() (vrgsExpected []ramendrv1alpha2.VolumeReplicationGroup) {
 		for number := range vrgNumbersExpected {
 			vrgsExpected = append(vrgsExpected, vrgs[number])
 		}

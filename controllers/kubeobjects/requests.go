@@ -7,7 +7,7 @@ import (
 	"context"
 
 	"github.com/go-logr/logr"
-	ramen "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,7 +49,7 @@ type RequestsManager interface {
 		s3KeyPrefix string,
 		secretKeyRef *corev1.SecretKeySelector,
 		sourceNamespaceName string,
-		objectsSpec ramen.KubeObjectsSpec,
+		objectsSpec ramendrv1alpha2.KubeObjectsSpec,
 		requestNamespaceName string,
 		protectRequestName string,
 		labels map[string]string,
@@ -63,7 +63,7 @@ type RequestsManager interface {
 		secretKeyRef *corev1.SecretKeySelector,
 		sourceNamespaceName string,
 		targetNamespaceName string,
-		recoverSpec ramen.KubeObjectsRecoverSpec,
+		recoverSpec ramendrv1alpha2.KubeObjectsRecoverSpec,
 		requestNamespaceName string,
 		protectRequestName string,
 		recoverRequestName string,

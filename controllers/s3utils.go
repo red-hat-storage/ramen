@@ -22,6 +22,7 @@ import (
 	"github.com/go-logr/logr"
 	errorswrapper "github.com/pkg/errors"
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -432,7 +433,7 @@ func downloadPVs(s ObjectStorer, pvKeyPrefix string) (
 }
 
 func DownloadVRGs(s ObjectStorer, pvKeyPrefix string) (
-	vrgList []ramen.VolumeReplicationGroup, err error,
+	vrgList []ramendrv1alpha2.VolumeReplicationGroup, err error,
 ) {
 	err = DownloadTypedObjects(s, pvKeyPrefix, &vrgList)
 

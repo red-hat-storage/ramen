@@ -24,7 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
-	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	"github.com/ramendr/ramen/controllers/volsync"
 )
 
@@ -76,7 +76,7 @@ var _ = Describe("VolSync Handler - utils", func() {
 })
 
 var _ = Describe("VolSync Handler - Volume Replication Class tests", func() {
-	asyncSpec := &ramendrv1alpha1.VRGAsyncSpec{
+	asyncSpec := &ramendrv1alpha2.VRGAsyncSpec{
 		SchedulingInterval:          "1h",
 		VolumeSnapshotClassSelector: metav1.LabelSelector{},
 	}
@@ -183,8 +183,8 @@ var _ = Describe("VolSync Handler - Volume Replication Class tests", func() {
 		var vsHandler *volsync.VSHandler
 		var testNamespace *corev1.Namespace
 		var testSourcePVC *corev1.PersistentVolumeClaim
-		var testRsSpec ramendrv1alpha1.VolSyncReplicationSourceSpec
-		var testRsSpecOrig ramendrv1alpha1.VolSyncReplicationSourceSpec
+		var testRsSpec ramendrv1alpha2.VolSyncReplicationSourceSpec
+		var testRsSpecOrig ramendrv1alpha2.VolSyncReplicationSourceSpec
 
 		capacity := resource.MustParse("1Gi")
 
@@ -228,7 +228,7 @@ var _ = Describe("VolSync Handler - Volume Replication Class tests", func() {
 			}, maxWait, interval).Should(Succeed())
 
 			// Create an RSSpec from the testSourcePVC
-			protectedPVC := &ramendrv1alpha1.ProtectedPVC{
+			protectedPVC := &ramendrv1alpha2.ProtectedPVC{
 				Name:               testSourcePVC.Name,
 				ProtectedByVolSync: true,
 				StorageClassName:   testSourcePVC.Spec.StorageClassName,
@@ -236,7 +236,7 @@ var _ = Describe("VolSync Handler - Volume Replication Class tests", func() {
 				AccessModes:        testSourcePVC.Spec.AccessModes,
 				Resources:          testSourcePVC.Spec.Resources,
 			}
-			testRsSpec = ramendrv1alpha1.VolSyncReplicationSourceSpec{
+			testRsSpec = ramendrv1alpha2.VolSyncReplicationSourceSpec{
 				ProtectedPVC: *protectedPVC,
 			}
 
@@ -401,7 +401,7 @@ var _ = Describe("VolSync Handler", func() {
 	var owner metav1.Object
 	var vsHandler *volsync.VSHandler
 
-	asyncSpec := &ramendrv1alpha1.VRGAsyncSpec{
+	asyncSpec := &ramendrv1alpha2.VRGAsyncSpec{
 		SchedulingInterval:          "5m",
 		VolumeSnapshotClassSelector: metav1.LabelSelector{},
 	}
@@ -443,8 +443,8 @@ var _ = Describe("VolSync Handler", func() {
 		Context("When reconciling RDSpec", func() {
 			capacity := resource.MustParse("2Gi")
 
-			rdSpec := ramendrv1alpha1.VolSyncReplicationDestinationSpec{
-				ProtectedPVC: ramendrv1alpha1.ProtectedPVC{
+			rdSpec := ramendrv1alpha2.VolSyncReplicationDestinationSpec{
+				ProtectedPVC: ramendrv1alpha2.ProtectedPVC{
 					Name:               "mytestpvc",
 					ProtectedByVolSync: true,
 					StorageClassName:   &testStorageClassName,
@@ -709,8 +709,8 @@ var _ = Describe("VolSync Handler", func() {
 			capacity := resource.MustParse("3Gi")
 			testPVCName := "mytestpvc"
 
-			rsSpec := ramendrv1alpha1.VolSyncReplicationSourceSpec{
-				ProtectedPVC: ramendrv1alpha1.ProtectedPVC{
+			rsSpec := ramendrv1alpha2.VolSyncReplicationSourceSpec{
+				ProtectedPVC: ramendrv1alpha2.ProtectedPVC{
 					Name:               testPVCName,
 					ProtectedByVolSync: true,
 					StorageClassName:   &testStorageClassName,
@@ -1124,10 +1124,10 @@ var _ = Describe("VolSync Handler", func() {
 		pvcName := "testpvc1"
 		pvcCapacity := resource.MustParse("1Gi")
 
-		var rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec
+		var rdSpec ramendrv1alpha2.VolSyncReplicationDestinationSpec
 		BeforeEach(func() {
-			rdSpec = ramendrv1alpha1.VolSyncReplicationDestinationSpec{
-				ProtectedPVC: ramendrv1alpha1.ProtectedPVC{
+			rdSpec = ramendrv1alpha2.VolSyncReplicationDestinationSpec{
+				ProtectedPVC: ramendrv1alpha2.ProtectedPVC{
 					Name:               pvcName,
 					ProtectedByVolSync: true,
 					StorageClassName:   &testStorageClassName,
@@ -1438,17 +1438,17 @@ var _ = Describe("VolSync Handler", func() {
 		pvcNamePrefixOtherOwner := "otherowner-test-pvc-rdcleanuptests-"
 		pvcCapacity := resource.MustParse("1Gi")
 
-		var rdSpecList []ramendrv1alpha1.VolSyncReplicationDestinationSpec
-		var rdSpecListOtherOwner []ramendrv1alpha1.VolSyncReplicationDestinationSpec
+		var rdSpecList []ramendrv1alpha2.VolSyncReplicationDestinationSpec
+		var rdSpecListOtherOwner []ramendrv1alpha2.VolSyncReplicationDestinationSpec
 
 		BeforeEach(func() {
-			rdSpecList = []ramendrv1alpha1.VolSyncReplicationDestinationSpec{}
-			rdSpecListOtherOwner = []ramendrv1alpha1.VolSyncReplicationDestinationSpec{}
+			rdSpecList = []ramendrv1alpha2.VolSyncReplicationDestinationSpec{}
+			rdSpecListOtherOwner = []ramendrv1alpha2.VolSyncReplicationDestinationSpec{}
 
 			// Precreate some ReplicationDestinations
 			for i := 0; i < 10; i++ {
-				rdSpec := ramendrv1alpha1.VolSyncReplicationDestinationSpec{
-					ProtectedPVC: ramendrv1alpha1.ProtectedPVC{
+				rdSpec := ramendrv1alpha2.VolSyncReplicationDestinationSpec{
+					ProtectedPVC: ramendrv1alpha2.ProtectedPVC{
 						Name:               pvcNamePrefix + strconv.Itoa(i),
 						ProtectedByVolSync: true,
 						StorageClassName:   &testStorageClassName,
@@ -1476,8 +1476,8 @@ var _ = Describe("VolSync Handler", func() {
 				"none", "Snapshot")
 
 			for i := 0; i < 2; i++ {
-				otherOwnerRdSpec := ramendrv1alpha1.VolSyncReplicationDestinationSpec{
-					ProtectedPVC: ramendrv1alpha1.ProtectedPVC{
+				otherOwnerRdSpec := ramendrv1alpha2.VolSyncReplicationDestinationSpec{
+					ProtectedPVC: ramendrv1alpha2.ProtectedPVC{
 						Name:               pvcNamePrefixOtherOwner + strconv.Itoa(i),
 						ProtectedByVolSync: true,
 						StorageClassName:   &testStorageClassName,
@@ -1551,7 +1551,7 @@ var _ = Describe("VolSync Handler", func() {
 		Context("When rdSpec List is empty", func() {
 			It("Should clean up all rd instances for the VRG", func() {
 				// Empty RDSpec list
-				Expect(vsHandler.CleanupRDNotInSpecList([]ramendrv1alpha1.VolSyncReplicationDestinationSpec{})).To(Succeed())
+				Expect(vsHandler.CleanupRDNotInSpecList([]ramendrv1alpha2.VolSyncReplicationDestinationSpec{})).To(Succeed())
 
 				rdList := &volsyncv1alpha1.ReplicationDestinationList{}
 				Eventually(func() int {
@@ -1570,7 +1570,7 @@ var _ = Describe("VolSync Handler", func() {
 		Context("When rdSpec List has some entries", func() {
 			It("Should clean up the proper rd instances for the VRG", func() {
 				// List with only entries 2, 5 and 6 - the others should be cleaned up
-				sList := []ramendrv1alpha1.VolSyncReplicationDestinationSpec{
+				sList := []ramendrv1alpha2.VolSyncReplicationDestinationSpec{
 					rdSpecList[2],
 					rdSpecList[5],
 					rdSpecList[6],
@@ -1632,17 +1632,17 @@ var _ = Describe("VolSync Handler", func() {
 		pvcNamePrefix := "test-pvc-rscleanuptests-"
 		pvcNamePrefixOtherOwner := "otherowner-test-pvc-rscleanuptests-"
 
-		var rsSpecList []ramendrv1alpha1.VolSyncReplicationSourceSpec
-		var rsSpecListOtherOwner []ramendrv1alpha1.VolSyncReplicationSourceSpec
+		var rsSpecList []ramendrv1alpha2.VolSyncReplicationSourceSpec
+		var rsSpecListOtherOwner []ramendrv1alpha2.VolSyncReplicationSourceSpec
 
 		BeforeEach(func() {
-			rsSpecList = []ramendrv1alpha1.VolSyncReplicationSourceSpec{}
-			rsSpecListOtherOwner = []ramendrv1alpha1.VolSyncReplicationSourceSpec{}
+			rsSpecList = []ramendrv1alpha2.VolSyncReplicationSourceSpec{}
+			rsSpecListOtherOwner = []ramendrv1alpha2.VolSyncReplicationSourceSpec{}
 
 			// Precreate some ReplicationSources
 			for i := 0; i < 10; i++ {
-				rsSpec := ramendrv1alpha1.VolSyncReplicationSourceSpec{
-					ProtectedPVC: ramendrv1alpha1.ProtectedPVC{
+				rsSpec := ramendrv1alpha2.VolSyncReplicationSourceSpec{
+					ProtectedPVC: ramendrv1alpha2.ProtectedPVC{
 						Name:               pvcNamePrefix + strconv.Itoa(i),
 						ProtectedByVolSync: true,
 						StorageClassName:   &testStorageClassName,
@@ -1666,8 +1666,8 @@ var _ = Describe("VolSync Handler", func() {
 				"none", "Snapshot")
 
 			for i := 0; i < 2; i++ {
-				otherOwnerRsSpec := ramendrv1alpha1.VolSyncReplicationSourceSpec{
-					ProtectedPVC: ramendrv1alpha1.ProtectedPVC{
+				otherOwnerRsSpec := ramendrv1alpha2.VolSyncReplicationSourceSpec{
+					ProtectedPVC: ramendrv1alpha2.ProtectedPVC{
 						Name:               pvcNamePrefixOtherOwner + strconv.Itoa(i),
 						ProtectedByVolSync: true,
 						StorageClassName:   &testStorageClassName,

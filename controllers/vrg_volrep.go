@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	rmnutil "github.com/ramendr/ramen/controllers/util"
 )
 
@@ -159,7 +160,7 @@ func (v *VRGInstance) isPVCReadyForSecondary(pvc *corev1.PersistentVolumeClaim, 
 	const ready bool = true
 
 	// If PVC is not being deleted, it is not ready for Secondary, unless action is failover
-	if v.instance.Spec.Action != ramendrv1alpha1.VRGActionFailover && pvc.GetDeletionTimestamp().IsZero() {
+	if v.instance.Spec.Action != ramendrv1alpha2.VRGActionFailover && pvc.GetDeletionTimestamp().IsZero() {
 		log.Info("VolumeReplication cannot become Secondary, as its PersistentVolumeClaim is not marked for deletion")
 
 		msg := "unable to transition to Secondary as PVC is not deleted"
@@ -324,7 +325,7 @@ func (v *VRGInstance) preparePVCForVRDeletion(pvc *corev1.PersistentVolumeClaim,
 	// to the current cluster, in case the PVC has been deleted (cases like STS the
 	// PVC may not be deleted). This is achieved by clearing the required claim ref.
 	// such that the PV can bind back to a recreated PVC. func ref.: updateExistingPVForSync
-	if v.instance.Spec.Async != nil || v.instance.Spec.ReplicationState == ramendrv1alpha1.Primary {
+	if v.instance.Spec.Async != nil || v.instance.Spec.ReplicationState == ramendrv1alpha2.Primary {
 		if err := v.undoPVRetentionForPVC(*pvc, log); err != nil {
 			return err
 		}
@@ -618,7 +619,7 @@ func (v *VRGInstance) reconcileVRForDeletion(pvc *corev1.PersistentVolumeClaim, 
 
 	pvcNamespacedName := types.NamespacedName{Name: pvc.Name, Namespace: pvc.Namespace}
 
-	if v.instance.Spec.ReplicationState == ramendrv1alpha1.Secondary {
+	if v.instance.Spec.ReplicationState == ramendrv1alpha2.Secondary {
 		requeueResult, ready, skip := v.reconcileVRAsSecondary(pvc, log)
 		if requeueResult {
 			log.Info("Requeuing due to failure in reconciling VolumeReplication resource as secondary")
@@ -884,7 +885,7 @@ func (v *VRGInstance) autoResync(state volrep.ReplicationState) bool {
 		return false
 	}
 
-	if v.instance.Spec.Action != ramendrv1alpha1.VRGActionFailover {
+	if v.instance.Spec.Action != ramendrv1alpha2.VRGActionFailover {
 		return false
 	}
 
@@ -1094,10 +1095,10 @@ func (v *VRGInstance) checkVRStatus(volRep *volrep.VolumeReplication) bool {
 	}
 
 	switch {
-	case v.instance.Spec.ReplicationState == ramendrv1alpha1.Primary:
-		return v.validateVRStatus(volRep, ramendrv1alpha1.Primary)
-	case v.instance.Spec.ReplicationState == ramendrv1alpha1.Secondary:
-		return v.validateVRStatus(volRep, ramendrv1alpha1.Secondary)
+	case v.instance.Spec.ReplicationState == ramendrv1alpha2.Primary:
+		return v.validateVRStatus(volRep, ramendrv1alpha2.Primary)
+	case v.instance.Spec.ReplicationState == ramendrv1alpha2.Secondary:
+		return v.validateVRStatus(volRep, ramendrv1alpha2.Secondary)
 	default:
 		v.log.Info(fmt.Sprintf("invalid Replication State %s for VolumeReplicationGroup (%s:%s)",
 			string(v.instance.Spec.ReplicationState), v.instance.Name, v.instance.Namespace))
@@ -1114,17 +1115,17 @@ func (v *VRGInstance) checkVRStatus(volRep *volrep.VolumeReplication) bool {
 //   - When replication state is Primary, only Completed condition is checked.
 //   - When replication state is Secondary, all 3 conditions for Completed/Degraded/Resyncing is
 //     checked and ensured healthy.
-func (v *VRGInstance) validateVRStatus(volRep *volrep.VolumeReplication, state ramendrv1alpha1.ReplicationState) bool {
+func (v *VRGInstance) validateVRStatus(volRep *volrep.VolumeReplication, state ramendrv1alpha2.ReplicationState) bool {
 	var (
 		stateString string
 		action      string
 	)
 
 	switch state {
-	case ramendrv1alpha1.Primary:
+	case ramendrv1alpha2.Primary:
 		stateString = "primary"
 		action = "promoted"
-	case ramendrv1alpha1.Secondary:
+	case ramendrv1alpha2.Secondary:
 		stateString = "secondary"
 		action = "demoted"
 	}
@@ -1145,7 +1146,7 @@ func (v *VRGInstance) validateVRStatus(volRep *volrep.VolumeReplication, state r
 	}
 
 	// if primary, all checks are completed
-	if state == ramendrv1alpha1.Secondary {
+	if state == ramendrv1alpha2.Secondary {
 		return v.validateAdditionalVRStatusForSecondary(volRep)
 	}
 
@@ -1304,7 +1305,7 @@ func (v *VRGInstance) updatePVCDataReadyCondition(pvcName, reason, message strin
 		return
 	}
 
-	protectedPVC := &ramendrv1alpha1.ProtectedPVC{Name: pvcName}
+	protectedPVC := &ramendrv1alpha2.ProtectedPVC{Name: pvcName}
 	setPVCDataReadyCondition(protectedPVC, reason, message, v.instance.Generation)
 
 	// created a new instance. Add it to the list
@@ -1336,7 +1337,7 @@ func (v *VRGInstance) updatePVCDataProtectedCondition(pvcName, reason, message s
 		return
 	}
 
-	protectedPVC := &ramendrv1alpha1.ProtectedPVC{Name: pvcName}
+	protectedPVC := &ramendrv1alpha2.ProtectedPVC{Name: pvcName}
 	setPVCDataProtectedCondition(protectedPVC, reason, message, v.instance.Generation)
 
 	// created a new instance. Add it to the list
@@ -1352,7 +1353,7 @@ func (v *VRGInstance) updatePVCLastSyncTime(pvcName string, lastSyncTime *metav1
 	protectedPVC.LastSyncTime = lastSyncTime
 }
 
-func setPVCDataReadyCondition(protectedPVC *ramendrv1alpha1.ProtectedPVC, reason, message string,
+func setPVCDataReadyCondition(protectedPVC *ramendrv1alpha2.ProtectedPVC, reason, message string,
 	observedGeneration int64,
 ) {
 	switch {
@@ -1375,7 +1376,7 @@ func setPVCDataReadyCondition(protectedPVC *ramendrv1alpha1.ProtectedPVC, reason
 	}
 }
 
-func setPVCDataProtectedCondition(protectedPVC *ramendrv1alpha1.ProtectedPVC, reason, message string,
+func setPVCDataProtectedCondition(protectedPVC *ramendrv1alpha2.ProtectedPVC, reason, message string,
 	observedGeneration int64,
 ) {
 	switch {
@@ -1411,12 +1412,12 @@ func (v *VRGInstance) updatePVCClusterDataProtectedCondition(pvcName, reason, me
 		return
 	}
 
-	protectedPVC := &ramendrv1alpha1.ProtectedPVC{Name: pvcName}
+	protectedPVC := &ramendrv1alpha2.ProtectedPVC{Name: pvcName}
 	setPVCClusterDataProtectedCondition(protectedPVC, reason, message, v.instance.Generation)
 	v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, *protectedPVC)
 }
 
-func setPVCClusterDataProtectedCondition(protectedPVC *ramendrv1alpha1.ProtectedPVC, reason, message string,
+func setPVCClusterDataProtectedCondition(protectedPVC *ramendrv1alpha2.ProtectedPVC, reason, message string,
 	observedGeneration int64,
 ) {
 	switch {
@@ -1557,7 +1558,7 @@ func (v *VRGInstance) removeFinalizerFromPVC(pvc *corev1.PersistentVolumeClaim,
 }
 
 // findProtectedPVC returns the &VRG.Status.ProtectedPVC[x] for the given pvcName
-func (v *VRGInstance) findProtectedPVC(pvcName string) *ramendrv1alpha1.ProtectedPVC {
+func (v *VRGInstance) findProtectedPVC(pvcName string) *ramendrv1alpha2.ProtectedPVC {
 	for index := range v.instance.Status.ProtectedPVCs {
 		protectedPVC := &v.instance.Status.ProtectedPVCs[index]
 		if protectedPVC.Name == pvcName {

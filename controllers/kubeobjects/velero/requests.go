@@ -18,7 +18,7 @@ import (
 
 	"github.com/go-logr/logr"
 	pkgerrors "github.com/pkg/errors"
-	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	"github.com/ramendr/ramen/controllers/kubeobjects"
 	velero "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -150,7 +150,7 @@ func (RequestsManager) RecoverRequestCreate(
 	secretKeyRef *corev1.SecretKeySelector,
 	sourceNamespaceName string,
 	targetNamespaceName string,
-	recoverSpec ramendrv1alpha1.KubeObjectsRecoverSpec,
+	recoverSpec ramendrv1alpha2.KubeObjectsRecoverSpec,
 	requestNamespaceName string,
 	captureName string,
 	recoverName string,
@@ -200,7 +200,7 @@ func backupDummyCreateAndRestore(
 	secretKeyRef *corev1.SecretKeySelector,
 	sourceNamespaceName string,
 	targetNamespaceName string,
-	recoverSpec ramendrv1alpha1.KubeObjectsRecoverSpec,
+	recoverSpec ramendrv1alpha2.KubeObjectsRecoverSpec,
 	requestNamespaceName string,
 	backupName string,
 	restoreName string,
@@ -233,7 +233,7 @@ func backupDummyStatusProcessAndRestore(
 	reader client.Reader,
 	sourceNamespaceName string,
 	targetNamespaceName string,
-	recoverSpec ramendrv1alpha1.KubeObjectsRecoverSpec,
+	recoverSpec ramendrv1alpha2.KubeObjectsRecoverSpec,
 	restoreName string,
 	labels map[string]string,
 ) (*velero.Restore, error) {
@@ -366,7 +366,7 @@ func backupRestore(
 	reader client.Reader,
 	sourceNamespaceName string,
 	targetNamespaceName string,
-	recoverSpec ramendrv1alpha1.KubeObjectsRecoverSpec,
+	recoverSpec ramendrv1alpha2.KubeObjectsRecoverSpec,
 	restoreName string,
 	labels map[string]string,
 ) (*velero.Restore, error) {
@@ -456,7 +456,7 @@ func (RequestsManager) ProtectRequestCreate(
 	s3KeyPrefix string,
 	secretKeyRef *corev1.SecretKeySelector,
 	sourceNamespaceName string,
-	objectsSpec ramendrv1alpha1.KubeObjectsSpec,
+	objectsSpec ramendrv1alpha2.KubeObjectsSpec,
 	requestNamespaceName string,
 	captureName string,
 	labels map[string]string,
@@ -500,7 +500,7 @@ func backupRealCreate(
 	s3KeyPrefix string,
 	secretKeyRef *corev1.SecretKeySelector,
 	sourceNamespaceName string,
-	objectsSpec ramendrv1alpha1.KubeObjectsSpec,
+	objectsSpec ramendrv1alpha2.KubeObjectsSpec,
 	requestNamespaceName string,
 	captureName string,
 	labels map[string]string,
@@ -519,7 +519,7 @@ func backupRealCreate(
 	return backupRealStatusProcess(backupLocation, backup, w)
 }
 
-func getBackupSpecFromObjectsSpec(objectsSpec ramendrv1alpha1.KubeObjectsSpec) velero.BackupSpec {
+func getBackupSpecFromObjectsSpec(objectsSpec ramendrv1alpha2.KubeObjectsSpec) velero.BackupSpec {
 	return velero.BackupSpec{
 		IncludedResources:       objectsSpec.IncludedResources,
 		ExcludedResources:       objectsSpec.ExcludedResources,
@@ -759,7 +759,7 @@ func backupSpecDummy() velero.BackupSpec {
 func restore(
 	requestNamespaceName string,
 	restoreName string,
-	recoverSpec ramendrv1alpha1.KubeObjectsRecoverSpec,
+	recoverSpec ramendrv1alpha2.KubeObjectsRecoverSpec,
 	backupName string,
 	sourceNamespaceName, targetNamespaceName string,
 	labels map[string]string,

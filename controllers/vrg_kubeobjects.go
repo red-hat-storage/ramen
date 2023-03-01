@@ -9,6 +9,7 @@ import (
 	"time"
 
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	"github.com/ramendr/ramen/controllers/kubeobjects"
 	"github.com/ramendr/ramen/controllers/util"
 	corev1 "k8s.io/api/core/v1"
@@ -28,21 +29,21 @@ func s3PathNamePrefix(vrgNamespaceName, vrgName string) string {
 
 const vrgS3ObjectNameSuffix = "a"
 
-func VrgObjectProtect(objectStorer ObjectStorer, vrg ramen.VolumeReplicationGroup) error {
+func VrgObjectProtect(objectStorer ObjectStorer, vrg ramendrv1alpha2.VolumeReplicationGroup) error {
 	return uploadTypedObject(objectStorer, s3PathNamePrefix(vrg.Namespace, vrg.Name), vrgS3ObjectNameSuffix, vrg)
 }
 
-func VrgObjectUnprotect(objectStorer ObjectStorer, vrg ramen.VolumeReplicationGroup) error {
+func VrgObjectUnprotect(objectStorer ObjectStorer, vrg ramendrv1alpha2.VolumeReplicationGroup) error {
 	return DeleteTypedObjects(objectStorer, s3PathNamePrefix(vrg.Namespace, vrg.Name), vrgS3ObjectNameSuffix, vrg)
 }
 
-func vrgObjectDownload(objectStorer ObjectStorer, pathName string, vrg *ramen.VolumeReplicationGroup) error {
+func vrgObjectDownload(objectStorer ObjectStorer, pathName string, vrg *ramendrv1alpha2.VolumeReplicationGroup) error {
 	return downloadTypedObject(objectStorer, pathName, vrgS3ObjectNameSuffix, vrg)
 }
 
-func kubeObjectsCaptureInterval(kubeObjectProtectionSpec *ramen.KubeObjectProtectionSpec) time.Duration {
+func kubeObjectsCaptureInterval(kubeObjectProtectionSpec *ramendrv1alpha2.KubeObjectProtectionSpec) time.Duration {
 	if kubeObjectProtectionSpec.CaptureInterval == nil {
-		return ramen.KubeObjectProtectionCaptureIntervalDefault
+		return ramendrv1alpha2.KubeObjectProtectionCaptureIntervalDefault
 	}
 
 	return kubeObjectProtectionSpec.CaptureInterval.Duration
@@ -145,7 +146,7 @@ func (v *VRGInstance) kubeObjectsCaptureStartOrResumeOrDelay(result *ctrl.Result
 	if captureToRecoverFrom == nil {
 		v.log.Info("Kube objects capture-to-recover-from nil")
 
-		captureToRecoverFrom = &ramen.KubeObjectsCaptureIdentifier{}
+		captureToRecoverFrom = &ramendrv1alpha2.KubeObjectsCaptureIdentifier{}
 	}
 
 	number := 1 - captureToRecoverFrom.Number
@@ -290,7 +291,7 @@ func (v *VRGInstance) kubeObjectsCaptureComplete(
 		return
 	}
 
-	status.CaptureToRecoverFrom = &ramen.KubeObjectsCaptureIdentifier{
+	status.CaptureToRecoverFrom = &ramendrv1alpha2.KubeObjectsCaptureIdentifier{
 		Number: captureNumber, StartTime: startTime,
 	}
 
@@ -348,20 +349,20 @@ func (v *VRGInstance) vrgObjectProtect(result *ctrl.Result, s3StoreAccessors []s
 	}
 }
 
-func (v *VRGInstance) getCaptureGroups() []ramen.KubeObjectsCaptureSpec {
+func (v *VRGInstance) getCaptureGroups() []ramendrv1alpha2.KubeObjectsCaptureSpec {
 	if v.instance.Spec.KubeObjectProtection.CaptureOrder != nil {
 		return v.instance.Spec.KubeObjectProtection.CaptureOrder
 	}
 
-	return []ramen.KubeObjectsCaptureSpec{{}}
+	return []ramendrv1alpha2.KubeObjectsCaptureSpec{{}}
 }
 
-func (v *VRGInstance) getRecoverGroups() []ramen.KubeObjectsRecoverSpec {
+func (v *VRGInstance) getRecoverGroups() []ramendrv1alpha2.KubeObjectsRecoverSpec {
 	if v.instance.Spec.KubeObjectProtection.RecoverOrder != nil {
 		return v.instance.Spec.KubeObjectProtection.RecoverOrder
 	}
 
-	return []ramen.KubeObjectsRecoverSpec{{}}
+	return []ramendrv1alpha2.KubeObjectsRecoverSpec{{}}
 }
 
 func (v *VRGInstance) kubeObjectsRecover(result *ctrl.Result,
@@ -377,7 +378,7 @@ func (v *VRGInstance) kubeObjectsRecover(result *ctrl.Result,
 	sourceVrgName := vrg.Name
 	sourcePathNamePrefix := s3PathNamePrefix(sourceVrgNamespaceName, sourceVrgName)
 
-	sourceVrg := &ramen.VolumeReplicationGroup{}
+	sourceVrg := &ramendrv1alpha2.VolumeReplicationGroup{}
 	if err := vrgObjectDownload(objectStorer, sourcePathNamePrefix, sourceVrg); err != nil {
 		v.log.Error(err, "Kube objects capture-to-recover-from identifier get error")
 
@@ -412,7 +413,7 @@ func (v *VRGInstance) kubeObjectsRecover(result *ctrl.Result,
 func (v *VRGInstance) kubeObjectsRecoveryStartOrResume(
 	result *ctrl.Result, s3StoreAccessor s3StoreAccessor,
 	sourceVrgNamespaceName, sourceVrgName string,
-	capture *ramen.KubeObjectsCaptureIdentifier,
+	capture *ramendrv1alpha2.KubeObjectsCaptureIdentifier,
 ) error {
 	vrg := v.instance
 	capturePathName, captureNamePrefix := kubeObjectsCapturePathNameAndNamePrefix(

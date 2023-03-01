@@ -41,6 +41,7 @@ import (
 	plrv1 "github.com/stolostron/multicloud-operators-placementrule/pkg/apis/apps/v1"
 
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	ramencontrollers "github.com/ramendr/ramen/controllers"
 	"github.com/ramendr/ramen/controllers/util"
 	velero "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
@@ -158,6 +159,9 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 
 	err = ramendrv1alpha1.AddToScheme(scheme.Scheme)
+	Expect(err).NotTo(HaveOccurred())
+
+	err = ramendrv1alpha2.AddToScheme(scheme.Scheme)
 	Expect(err).NotTo(HaveOccurred())
 
 	err = volrep.AddToScheme(scheme.Scheme)

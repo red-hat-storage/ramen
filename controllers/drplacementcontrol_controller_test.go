@@ -30,6 +30,7 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	"github.com/ramendr/ramen/controllers"
 	rmnutil "github.com/ramendr/ramen/controllers/util"
 	plrv1 "github.com/stolostron/multicloud-operators-placementrule/pkg/apis/apps/v1"
@@ -184,14 +185,14 @@ func (f FakeMCVGetter) GetNamespaceFromManagedCluster(
 	return appNamespaceObj, errorswrapper.Wrap(err, "failed to get Namespace from managedcluster")
 }
 
-var baseVRG = &rmn.VolumeReplicationGroup{
+var baseVRG = &ramendrv1alpha2.VolumeReplicationGroup{
 	TypeMeta:   metav1.TypeMeta{Kind: "VolumeReplicationGroup", APIVersion: "ramendr.openshift.io/v1alpha1"},
 	ObjectMeta: metav1.ObjectMeta{Name: DRPCName, Namespace: DRPCNamespaceName},
-	Spec: rmn.VolumeReplicationGroupSpec{
-		Async: &rmn.VRGAsyncSpec{
+	Spec: ramendrv1alpha2.VolumeReplicationGroupSpec{
+		Async: &ramendrv1alpha2.VRGAsyncSpec{
 			SchedulingInterval: schedulingInterval,
 		},
-		ReplicationState: rmn.Primary,
+		ReplicationState: ramendrv1alpha2.Primary,
 		PVCSelector: metav1.LabelSelector{
 			MatchLabels: map[string]string{"appclass": "gold"},
 		},
@@ -202,11 +203,11 @@ var baseVRG = &rmn.VolumeReplicationGroup{
 //nolint:funlen,cyclop
 func (f FakeMCVGetter) GetVRGFromManagedCluster(resourceName, resourceNamespace, managedCluster string,
 	annnotations map[string]string,
-) (*rmn.VolumeReplicationGroup, error) {
+) (*ramendrv1alpha2.VolumeReplicationGroup, error) {
 	conType := controllers.VRGConditionTypeDataReady
 	reason := controllers.VRGConditionReasonReplicating
-	vrgStatus := rmn.VolumeReplicationGroupStatus{
-		State:                       rmn.PrimaryState,
+	vrgStatus := ramendrv1alpha2.VolumeReplicationGroupStatus{
+		State:                       ramendrv1alpha2.PrimaryState,
 		PrepareForFinalSyncComplete: true,
 		FinalSyncComplete:           true,
 		Conditions: []metav1.Condition{
@@ -219,7 +220,7 @@ func (f FakeMCVGetter) GetVRGFromManagedCluster(resourceName, resourceNamespace,
 				ObservedGeneration: 1,
 			},
 		},
-		ProtectedPVCs: []rmn.ProtectedPVC{},
+		ProtectedPVCs: []ramendrv1alpha2.ProtectedPVC{},
 	}
 	vrg := baseVRG.DeepCopy()
 	vrg.Status = vrgStatus
@@ -229,7 +230,9 @@ func (f FakeMCVGetter) GetVRGFromManagedCluster(resourceName, resourceNamespace,
 	switch getFunctionNameAtIndex(2) {
 	case "updateDRPCStatus":
 		for i := 0; i < pvcCount; i++ {
-			vrg.Status.ProtectedPVCs = append(vrg.Status.ProtectedPVCs, rmn.ProtectedPVC{Name: fmt.Sprintf("fakePVC%d", i)})
+			vrg.Status.ProtectedPVCs = append(
+				vrg.Status.ProtectedPVCs,
+				ramendrv1alpha2.ProtectedPVC{Name: fmt.Sprintf("fakePVC%d", i)})
 		}
 
 		return vrg, nil
@@ -284,7 +287,7 @@ func (f FakeMCVGetter) GetVRGFromManagedCluster(resourceName, resourceNamespace,
 				ObservedGeneration: vrgFromMW.Generation,
 			})
 
-			newProtectedPVC := &rmn.ProtectedPVC{
+			newProtectedPVC := &ramendrv1alpha2.ProtectedPVC{
 				Name: "random name",
 			}
 
@@ -309,7 +312,7 @@ func (f FakeMCVGetter) DeleteNamespaceManagedClusterView(
 	return nil
 }
 
-func getVRGFromManifestWork(managedCluster string) (*rmn.VolumeReplicationGroup, error) {
+func getVRGFromManifestWork(managedCluster string) (*ramendrv1alpha2.VolumeReplicationGroup, error) {
 	manifestLookupKey := types.NamespacedName{
 		Name:      rmnutil.ManifestWorkName(DRPCName, DRPCNamespaceName, "vrg"),
 		Namespace: managedCluster,
@@ -323,7 +326,7 @@ func getVRGFromManifestWork(managedCluster string) (*rmn.VolumeReplicationGroup,
 			fmt.Sprintf("requested resource not found in ManagedCluster %s", managedCluster))
 	}
 
-	vrg := &rmn.VolumeReplicationGroup{}
+	vrg := &ramendrv1alpha2.VolumeReplicationGroup{}
 	err = yaml.Unmarshal(mw.Spec.Workload.Manifests[0].Raw, vrg)
 	Expect(err).NotTo(HaveOccurred())
 
@@ -442,7 +445,7 @@ func createDRPC(userPlacementRuleName, name, namespace, drPolicyName string) *rm
 					"environment": "dev.AZ1",
 				},
 			},
-			KubeObjectProtection: &rmn.KubeObjectProtectionSpec{},
+			KubeObjectProtection: &ramendrv1alpha2.KubeObjectProtectionSpec{},
 		},
 	}
 	Expect(k8sClient.Create(context.TODO(), drpc)).Should(Succeed())
@@ -659,13 +662,16 @@ func deleteDRPolicyAsync() {
 	Expect(k8sClient.Delete(context.TODO(), asyncDRPolicy)).To(Succeed())
 }
 
-func moveVRGToSecondary(clusterNamespace, mwType string, protectData bool) (*rmn.VolumeReplicationGroup, error) {
+func moveVRGToSecondary(
+	clusterNamespace, mwType string,
+	protectData bool,
+) (*ramendrv1alpha2.VolumeReplicationGroup, error) {
 	manifestLookupKey := types.NamespacedName{
 		Name:      rmnutil.ManifestWorkName(DRPCName, DRPCNamespaceName, mwType),
 		Namespace: clusterNamespace,
 	}
 
-	var vrg *rmn.VolumeReplicationGroup
+	var vrg *ramendrv1alpha2.VolumeReplicationGroup
 
 	var err error
 
@@ -679,7 +685,10 @@ func moveVRGToSecondary(clusterNamespace, mwType string, protectData bool) (*rmn
 	return vrg, err
 }
 
-func updateVRGMW(manifestLookupKey types.NamespacedName, dataProtected bool) (*rmn.VolumeReplicationGroup, error) {
+func updateVRGMW(
+	manifestLookupKey types.NamespacedName,
+	dataProtected bool,
+) (*ramendrv1alpha2.VolumeReplicationGroup, error) {
 	mw := &ocmworkv1.ManifestWork{}
 
 	err := k8sClient.Get(context.TODO(), manifestLookupKey, mw)
@@ -690,13 +699,13 @@ func updateVRGMW(manifestLookupKey types.NamespacedName, dataProtected bool) (*r
 	Expect(err).NotTo(HaveOccurred())
 
 	vrgClientManifest := &mw.Spec.Workload.Manifests[0]
-	vrg := &rmn.VolumeReplicationGroup{}
+	vrg := &ramendrv1alpha2.VolumeReplicationGroup{}
 
 	err = yaml.Unmarshal(vrgClientManifest.RawExtension.Raw, &vrg)
 	Expect(err).NotTo(HaveOccurred())
 
-	if vrg.Spec.ReplicationState == rmn.Secondary {
-		vrg.Status.State = rmn.SecondaryState
+	if vrg.Spec.ReplicationState == ramendrv1alpha2.Secondary {
+		vrg.Status.State = ramendrv1alpha2.SecondaryState
 
 		updateDataProtectedCondition(dataProtected, vrg)
 
@@ -717,7 +726,7 @@ func updateVRGMW(manifestLookupKey types.NamespacedName, dataProtected bool) (*r
 	return vrg, nil
 }
 
-func updateDataProtectedCondition(dataProtected bool, vrg *rmn.VolumeReplicationGroup) {
+func updateDataProtectedCondition(dataProtected bool, vrg *ramendrv1alpha2.VolumeReplicationGroup) {
 	if dataProtected {
 		if len(vrg.Status.Conditions) == 0 {
 			vrg.Status.Conditions = append(vrg.Status.Conditions, metav1.Condition{
@@ -931,13 +940,13 @@ func verifyVRGManifestWorkCreatedAsPrimary(managedCluster string) {
 
 	Expect(vrgClientManifest).ToNot(BeNil())
 
-	vrg := &rmn.VolumeReplicationGroup{}
+	vrg := &ramendrv1alpha2.VolumeReplicationGroup{}
 
 	err = yaml.Unmarshal(vrgClientManifest.RawExtension.Raw, &vrg)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(vrg.Name).Should(Equal(DRPCName))
 	Expect(vrg.Spec.PVCSelector.MatchLabels["appclass"]).Should(Equal("gold"))
-	Expect(vrg.Spec.ReplicationState).Should(Equal(rmn.Primary))
+	Expect(vrg.Spec.ReplicationState).Should(Equal(ramendrv1alpha2.Primary))
 
 	// ensure DRPC copied KubeObjectProtection contents to VRG
 	drpc := getLatestDRPC()

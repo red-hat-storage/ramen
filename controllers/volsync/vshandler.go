@@ -27,7 +27,7 @@ import (
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
-	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
+	ramendrv1alpha2 "github.com/ramendr/ramen/api/v1alpha2"
 	"github.com/ramendr/ramen/controllers/util"
 )
 
@@ -71,7 +71,7 @@ type VSHandler struct {
 }
 
 func NewVSHandler(ctx context.Context, client client.Client, log logr.Logger, owner metav1.Object,
-	asyncSpec *ramendrv1alpha1.VRGAsyncSpec, defaultCephFSCSIDriverName string, copyMethod string,
+	asyncSpec *ramendrv1alpha2.VRGAsyncSpec, defaultCephFSCSIDriverName string, copyMethod string,
 ) *VSHandler {
 	vsHandler := &VSHandler{
 		ctx:                        ctx,
@@ -94,7 +94,7 @@ func NewVSHandler(ctx context.Context, client client.Client, log logr.Logger, ow
 // returns replication destination only if create/update is successful and the RD is considered available.
 // Callers should assume getting a nil replication destination back means they should retry/requeue.
 func (v *VSHandler) ReconcileRD(
-	rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec) (*volsyncv1alpha1.ReplicationDestination, error,
+	rdSpec ramendrv1alpha2.VolSyncReplicationDestinationSpec) (*volsyncv1alpha1.ReplicationDestination, error,
 ) {
 	l := v.log.WithValues("rdSpec", rdSpec)
 
@@ -162,7 +162,7 @@ func rdStatusReady(rd *volsyncv1alpha1.ReplicationDestination, log logr.Logger) 
 }
 
 func (v *VSHandler) createOrUpdateRD(
-	rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec, sshKeysSecretName string,
+	rdSpec ramendrv1alpha2.VolSyncReplicationDestinationSpec, sshKeysSecretName string,
 	copyMethod volsyncv1alpha1.CopyMethodType, dstPVC *string) (*volsyncv1alpha1.ReplicationDestination, error,
 ) {
 	l := v.log.WithValues("rdSpec", rdSpec)
@@ -253,7 +253,7 @@ func (v *VSHandler) isPVCInUseByNonRDPod(pvcName string) (bool, error) {
 // Returns replication source only if create/update is successful
 // Callers should assume getting a nil replication source back means they should retry/requeue.
 // Returns true/false if final sync is complete, and also returns an RS if one was reconciled.
-func (v *VSHandler) ReconcileRS(rsSpec ramendrv1alpha1.VolSyncReplicationSourceSpec,
+func (v *VSHandler) ReconcileRS(rsSpec ramendrv1alpha2.VolSyncReplicationSourceSpec,
 	runFinalSync bool) (bool /* finalSyncComplete */, *volsyncv1alpha1.ReplicationSource, error,
 ) {
 	l := v.log.WithValues("rsSpec", rsSpec, "runFinalSync", runFinalSync)
@@ -308,7 +308,7 @@ func (v *VSHandler) ReconcileRS(rsSpec ramendrv1alpha1.VolSyncReplicationSourceS
 // a 2nd call to runFinalSync and we may have already cleaned up the PVC - so if pvc does not
 // exist, treat the same as not in use - continue on with reconcile of the RS (and therefore
 // check status to confirm final sync is complete)
-func (v *VSHandler) validatePVCBeforeRS(rsSpec ramendrv1alpha1.VolSyncReplicationSourceSpec,
+func (v *VSHandler) validatePVCBeforeRS(rsSpec ramendrv1alpha2.VolSyncReplicationSourceSpec,
 	runFinalSync bool) (bool, error,
 ) {
 	l := v.log.WithValues("rsSpec", rsSpec, "runFinalSync", runFinalSync)
@@ -373,7 +373,7 @@ func isFinalSyncComplete(replicationSource *volsyncv1alpha1.ReplicationSource, l
 	return true
 }
 
-func (v *VSHandler) cleanupAfterRSFinalSync(rsSpec ramendrv1alpha1.VolSyncReplicationSourceSpec) error {
+func (v *VSHandler) cleanupAfterRSFinalSync(rsSpec ramendrv1alpha2.VolSyncReplicationSourceSpec) error {
 	// Final sync is done, make sure PVC is cleaned up, Skip if we are using CopyMethodDirect
 	if v.IsCopyMethodDirect() {
 		v.log.Info("Preserving PVC to use for CopyMethodDirect", "pvcName", rsSpec.ProtectedPVC.Name)
@@ -387,7 +387,7 @@ func (v *VSHandler) cleanupAfterRSFinalSync(rsSpec ramendrv1alpha1.VolSyncReplic
 }
 
 //nolint:funlen
-func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSourceSpec,
+func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha2.VolSyncReplicationSourceSpec,
 	sshKeysSecretName string, runFinalSync bool) (*volsyncv1alpha1.ReplicationSource, error,
 ) {
 	l := v.log.WithValues("rsSpec", rsSpec, "runFinalSync", runFinalSync)
@@ -712,7 +712,7 @@ func (v *VSHandler) DeleteRD(pvcName string) error {
 	return nil
 }
 
-func (v *VSHandler) CleanupRDNotInSpecList(rdSpecList []ramendrv1alpha1.VolSyncReplicationDestinationSpec) error {
+func (v *VSHandler) CleanupRDNotInSpecList(rdSpecList []ramendrv1alpha2.VolSyncReplicationDestinationSpec) error {
 	// Remove any ReplicationDestination owned (by parent vrg owner) that is not in the provided rdSpecList
 	currentRDListByOwner, err := v.listRDByOwner()
 	if err != nil {
@@ -831,7 +831,7 @@ func (v *VSHandler) listByOwner(list client.ObjectList) error {
 	return nil
 }
 
-func (v *VSHandler) EnsurePVCfromRD(rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec) error {
+func (v *VSHandler) EnsurePVCfromRD(rdSpec ramendrv1alpha2.VolSyncReplicationDestinationSpec) error {
 	l := v.log.WithValues("rdSpec", rdSpec)
 
 	latestImage, err := v.getRDLatestImage(rdSpec.ProtectedPVC.Name)
@@ -859,7 +859,7 @@ func (v *VSHandler) EnsurePVCfromRD(rdSpec ramendrv1alpha1.VolSyncReplicationDes
 }
 
 func (v *VSHandler) EnsurePVCforDirectCopy(ctx context.Context, log logr.Logger,
-	rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec,
+	rdSpec ramendrv1alpha2.VolSyncReplicationDestinationSpec,
 ) error {
 	logger := log.WithValues("PVC", rdSpec.ProtectedPVC.Name)
 
@@ -911,7 +911,7 @@ func (v *VSHandler) EnsurePVCforDirectCopy(ctx context.Context, log logr.Logger,
 	return nil
 }
 
-func (v *VSHandler) validateSnapshotAndEnsurePVC(rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec,
+func (v *VSHandler) validateSnapshotAndEnsurePVC(rdSpec ramendrv1alpha2.VolSyncReplicationDestinationSpec,
 	snapshotRef corev1.TypedLocalObjectReference,
 ) error {
 	snap, err := v.validateSnapshotAndAddDoNotDeleteLabel(snapshotRef)
@@ -953,7 +953,7 @@ func (v *VSHandler) validateSnapshotAndEnsurePVC(rdSpec ramendrv1alpha1.VolSyncR
 }
 
 //nolint:funlen,gocognit,cyclop
-func (v *VSHandler) ensurePVCFromSnapshot(rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec,
+func (v *VSHandler) ensurePVCFromSnapshot(rdSpec ramendrv1alpha2.VolSyncReplicationDestinationSpec,
 	snapshotRef corev1.TypedLocalObjectReference, snapRestoreSize *resource.Quantity,
 ) (*corev1.PersistentVolumeClaim, error) {
 	l := v.log.WithValues("pvcName", rdSpec.ProtectedPVC.Name, "snapshotRef", snapshotRef,
@@ -1194,7 +1194,7 @@ func (v *VSHandler) getRsyncServiceType() *corev1.ServiceType {
 // (or reuse if it already exists).  If not cephfs, return and do not modify rsSpec.
 // 2. Modify rsSpec to use the new storageclass and also update AccessModes to 'ReadOnlyMany' as per the instructions
 // above.
-func (v *VSHandler) ModifyRSSpecForCephFS(rsSpec *ramendrv1alpha1.VolSyncReplicationSourceSpec,
+func (v *VSHandler) ModifyRSSpecForCephFS(rsSpec *ramendrv1alpha2.VolSyncReplicationSourceSpec,
 	storageClass *storagev1.StorageClass,
 ) error {
 	if storageClass.Provisioner != v.defaultCephFSCSIDriverName {
@@ -1468,7 +1468,7 @@ func (v *VSHandler) IsRDDataProtected(pvcName string) (bool, error) {
 	return isLatestImageReady(latestImage), nil
 }
 
-func (v *VSHandler) SelectDestCopyMethod(rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec, log logr.Logger,
+func (v *VSHandler) SelectDestCopyMethod(rdSpec ramendrv1alpha2.VolSyncReplicationDestinationSpec, log logr.Logger,
 ) (volsyncv1alpha1.CopyMethodType, *string, error) {
 	if !v.IsCopyMethodDirect() {
 		v.log.Info("Using default copyMethod of Snapshot")
