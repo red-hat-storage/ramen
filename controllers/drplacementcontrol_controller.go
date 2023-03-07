@@ -878,6 +878,8 @@ func (r *DRPlacementControlReconciler) getVRGsFromManagedClusters(drpc *rmn.DRPl
 			failedClusterToQuery = drCluster
 
 			log.Info(fmt.Sprintf("failed to retrieve VRG from %s. err (%v)", drCluster, err))
+
+			continue
 		}
 
 		clustersQueriedSuccessfully++
