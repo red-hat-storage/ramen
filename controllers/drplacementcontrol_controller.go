@@ -485,7 +485,7 @@ func (r *DRPlacementControlReconciler) reconcileDRPCInstance(d *DRPCInstance, lo
 		r.Callback(d.instance.Name, string(d.getLastDRState()))
 	}
 
-	if d.mcvRequestInProgress {
+	if d.mcvRequestInProgress && d.getLastDRState() != "" {
 		duration := d.getRequeueDuration()
 		log.Info(fmt.Sprintf("Requeing after %v", duration))
 
