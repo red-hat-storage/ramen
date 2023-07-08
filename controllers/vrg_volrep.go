@@ -1889,7 +1889,7 @@ func restoreClusterDataObjects[
 
 		if err := v.reconciler.Create(v.ctx, obj); err != nil {
 			if k8serrors.IsAlreadyExists(err) {
-				err := validateExistingObject(objectCopy)
+				err := validateExistingObject(object)
 				if err != nil {
 					v.log.Info("Object exists. Ignoring and moving to next object", "error", err.Error())
 					// ignoring any errors
