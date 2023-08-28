@@ -754,20 +754,7 @@ func (r *DRPlacementControlReconciler) createDRPCInstance(
 		return nil, fmt.Errorf("configmap get: %w", err)
 	}
 
-	syncMetricLabels := SyncMetricLabels(drPolicy, drpc)
-	syncMetrics := NewSyncMetrics(syncMetricLabels)
-
-	syncDurationMetricLabels := SyncDurationMetricLabels(drPolicy, drpc)
-	syncDurationMetrics := NewSyncDurationMetric(syncDurationMetricLabels)
-
-	syncDataBytesLabels := SyncDataBytesMetricLabels(drPolicy, drpc)
-	syncDataMetrics := NewSyncDataBytesMetric(syncDataBytesLabels)
-
-	drpcMetrics := DRPCMetrics{
-		SyncMetrics:          syncMetrics,
-		SyncDurationMetrics:  syncDurationMetrics,
-		SyncDataBytesMetrics: syncDataMetrics,
-	}
+	drpcMetrics := r.createDRPCMetrics(drPolicy, drpc)
 
 	d := &DRPCInstance{
 		reconciler:      r,
@@ -780,7 +767,7 @@ func (r *DRPlacementControlReconciler) createDRPCInstance(
 		vrgs:            vrgs,
 		vrgNamespace:    vrgNamespace,
 		volSyncDisabled: ramenConfig.VolSync.Disabled,
-		metrics:         &drpcMetrics,
+		metrics:         drpcMetrics,
 		mwu: rmnutil.MWUtil{
 			Client:          r.Client,
 			APIReader:       r.APIReader,
@@ -802,6 +789,25 @@ func (r *DRPlacementControlReconciler) createDRPCInstance(
 	d.instance.Status.DeepCopyInto(&d.savedInstanceStatus)
 
 	return d, nil
+}
+
+func (r *DRPlacementControlReconciler) createDRPCMetrics(
+	drPolicy *rmn.DRPolicy, drpc *rmn.DRPlacementControl,
+) *DRPCMetrics {
+	syncMetricLabels := SyncMetricLabels(drPolicy, drpc)
+	syncMetrics := NewSyncMetrics(syncMetricLabels)
+
+	syncDurationMetricLabels := SyncDurationMetricLabels(drPolicy, drpc)
+	syncDurationMetrics := NewSyncDurationMetric(syncDurationMetricLabels)
+
+	syncDataBytesLabels := SyncDataBytesMetricLabels(drPolicy, drpc)
+	syncDataMetrics := NewSyncDataBytesMetric(syncDataBytesLabels)
+
+	return &DRPCMetrics{
+		SyncMetrics:          syncMetrics,
+		SyncDurationMetrics:  syncDurationMetrics,
+		SyncDataBytesMetrics: syncDataMetrics,
+	}
 }
 
 // isBeingDeleted returns true if either DRPC, user placement, or both are being deleted
@@ -1544,9 +1550,11 @@ func (r *DRPlacementControlReconciler) updateResourceCondition(
 		drpc.Status.LastGroupSyncDuration = nil
 		drpc.Status.LastGroupSyncBytes = nil
 
-		r.setLastSyncTimeMetric(&drpcMetrics.SyncMetrics, nil, log)
-		r.setLastSyncDurationMetric(&drpcMetrics.SyncDurationMetrics, nil, log)
-		r.setLastSyncBytesMetric(&drpcMetrics.SyncDataBytesMetrics, nil, log)
+		if drpcMetrics != nil {
+			r.setLastSyncTimeMetric(&drpcMetrics.SyncMetrics, nil, log)
+			r.setLastSyncDurationMetric(&drpcMetrics.SyncDurationMetrics, nil, log)
+			r.setLastSyncBytesMetric(&drpcMetrics.SyncDataBytesMetrics, nil, log)
+		}
 	} else {
 		drpc.Status.ResourceConditions.ResourceMeta.Kind = vrg.Kind
 		drpc.Status.ResourceConditions.ResourceMeta.Name = vrg.Name
@@ -1564,9 +1572,11 @@ func (r *DRPlacementControlReconciler) updateResourceCondition(
 		drpc.Status.LastGroupSyncDuration = vrg.Status.LastGroupSyncDuration
 		drpc.Status.LastGroupSyncBytes = vrg.Status.LastGroupSyncBytes
 
-		r.setLastSyncTimeMetric(&drpcMetrics.SyncMetrics, vrg.Status.LastGroupSyncTime, log)
-		r.setLastSyncDurationMetric(&drpcMetrics.SyncDurationMetrics, vrg.Status.LastGroupSyncDuration, log)
-		r.setLastSyncBytesMetric(&drpcMetrics.SyncDataBytesMetrics, vrg.Status.LastGroupSyncBytes, log)
+		if drpcMetrics != nil {
+			r.setLastSyncTimeMetric(&drpcMetrics.SyncMetrics, vrg.Status.LastGroupSyncTime, log)
+			r.setLastSyncDurationMetric(&drpcMetrics.SyncDurationMetrics, vrg.Status.LastGroupSyncDuration, log)
+			r.setLastSyncBytesMetric(&drpcMetrics.SyncDataBytesMetrics, vrg.Status.LastGroupSyncBytes, log)
+		}
 	}
 }
 
