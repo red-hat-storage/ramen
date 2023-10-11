@@ -30,6 +30,9 @@ const (
 	// Annotations for MW and PlacementRule
 	DRPCNameAnnotation      = "drplacementcontrol.ramendr.openshift.io/drpc-name"
 	DRPCNamespaceAnnotation = "drplacementcontrol.ramendr.openshift.io/drpc-namespace"
+
+	// Annotation for application namespace on the managed cluster
+	DRPCAppNamespace = "drplacementcontrol.ramendr.openshift.io/app-namespace"
 )
 
 var (
