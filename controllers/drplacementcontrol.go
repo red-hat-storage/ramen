@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"sigs.k8s.io/yaml"
 
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
@@ -535,20 +536,23 @@ func (d *DRPCInstance) checkMetroFailoverPrerequisites(curHomeCluster string) (b
 func (d *DRPCInstance) checkRegionalFailoverPrerequisites() bool {
 	d.setProgression(rmn.ProgressionWaitForStorageMaintenanceActivation)
 
-	if required, activationsRequired := requiresRegionalFailoverPrerequisites(
-		d.ctx,
-		d.reconciler.APIReader,
-		rmnutil.DRPolicyS3Profiles(d.drPolicy, d.drClusters).List(),
-		d.instance.GetName(), d.instance.GetNamespace(),
-		d.vrgs, d.instance.Spec.FailoverCluster,
-		d.reconciler.ObjStoreGetter, d.log); required {
-		for _, drCluster := range d.drClusters {
-			if drCluster.Name != d.instance.Spec.FailoverCluster {
-				continue
-			}
+	for _, drCluster := range d.drClusters {
+		if drCluster.Name != d.instance.Spec.FailoverCluster {
+			continue
+		}
 
+		// we want to work with failover cluster only, because the previous primary cluster might be unreachable
+		if required, activationsRequired := requiresRegionalFailoverPrerequisites(
+			d.ctx,
+			d.reconciler.APIReader,
+			[]string{drCluster.Spec.S3ProfileName},
+			d.instance.GetName(), d.instance.GetNamespace(),
+			d.vrgs, d.instance.Spec.FailoverCluster,
+			d.reconciler.ObjStoreGetter, d.log); required {
 			return checkFailoverMaintenanceActivations(drCluster, activationsRequired, d.log)
 		}
+
+		break
 	}
 
 	return true
@@ -1204,7 +1208,7 @@ func (d *DRPCInstance) switchToCluster(targetCluster, targetClusterNamespace str
 		vrgState = vrg.Status.State
 	}
 
-	d.log.Info(fmt.Sprintf("PVs/PVCs have been Restored? %v and VRG Primary %v", restored, vrgState))
+	d.log.Info(fmt.Sprintf("PVs/PVCs have been Restored? '%v' and VRG Primary='%v'", restored, vrgState))
 
 	if !restored || vrg.Status.State != rmn.PrimaryState {
 		d.setProgression(rmn.ProgressionWaitingForResourceRestore)
@@ -1388,9 +1392,11 @@ func (d *DRPCInstance) updateUserPlacementRule(homeCluster, reason string) error
 	d.log.Info(fmt.Sprintf("Updating user Placement %s homeCluster %s",
 		d.userPlacement.GetName(), homeCluster))
 
-	err := d.addAnnotation(LastAppDeploymentCluster, homeCluster)
-	if err != nil {
-		return err
+	added := rmnutil.AddAnnotation(d.instance, LastAppDeploymentCluster, homeCluster)
+	if added {
+		if err := d.reconciler.Update(d.ctx, d.instance); err != nil {
+			return err
+		}
 	}
 
 	newPD := &clrapiv1beta1.ClusterDecision{
@@ -1399,19 +1405,6 @@ func (d *DRPCInstance) updateUserPlacementRule(homeCluster, reason string) error
 	}
 
 	return d.reconciler.updateUserPlacementStatusDecision(d.ctx, d.userPlacement, newPD)
-}
-
-func (d *DRPCInstance) addAnnotation(key, value string) error {
-	annotations := d.instance.GetAnnotations()
-
-	if annotations == nil {
-		annotations = map[string]string{}
-	}
-
-	annotations[key] = value
-	d.instance.SetAnnotations(annotations)
-
-	return d.reconciler.Update(d.ctx, d.instance)
 }
 
 func (d *DRPCInstance) clearUserPlacementRuleStatus() error {
@@ -1461,16 +1454,9 @@ func (d *DRPCInstance) createVRGManifestWork(homeCluster string, repState rmn.Re
 	return nil
 }
 
+// ensureVRGManifestWork ensures that the VRG ManifestWork exists and matches the current VRG state.
+// TODO: This may be safe only when the VRG is primary - check if callers use this correctly.
 func (d *DRPCInstance) ensureVRGManifestWork(homeCluster string) error {
-	mw, mwErr := d.mwu.FindManifestWorkByType(rmnutil.MWTypeVRG, homeCluster)
-	if mwErr != nil {
-		d.log.Info("Ensure VRG ManifestWork", "Error", mwErr)
-	}
-
-	if mw != nil {
-		return nil
-	}
-
 	d.log.Info("Ensure VRG ManifestWork",
 		"Last State:", d.getLastDRState(), "cluster", homeCluster)
 
@@ -1509,7 +1495,7 @@ func (d *DRPCInstance) generateVRG(repState rmn.ReplicationState) rmn.VolumeRepl
 		Spec: rmn.VolumeReplicationGroupSpec{
 			PVCSelector:          d.instance.Spec.PVCSelector,
 			ReplicationState:     repState,
-			S3Profiles:           rmnutil.DRPolicyS3Profiles(d.drPolicy, d.drClusters).List(),
+			S3Profiles:           d.availableS3Profiles(),
 			KubeObjectProtection: d.instance.Spec.KubeObjectProtection,
 		},
 	}
@@ -1519,6 +1505,21 @@ func (d *DRPCInstance) generateVRG(repState rmn.ReplicationState) rmn.VolumeRepl
 	vrg.Spec.Sync = d.generateVRGSpecSync()
 
 	return vrg
+}
+
+func (d *DRPCInstance) availableS3Profiles() []string {
+	profiles := sets.New[string]()
+
+	for i := range d.drClusters {
+		drCluster := &d.drClusters[i]
+		if drClusterIsDeleted(drCluster) {
+			continue
+		}
+
+		profiles.Insert(drCluster.Spec.S3ProfileName)
+	}
+
+	return sets.List(profiles)
 }
 
 func (d *DRPCInstance) generateVRGSpecAsync() *rmn.VRGAsyncSpec {
@@ -1748,7 +1749,7 @@ func (d *DRPCInstance) cleanupForVolSync(clusterToSkip string) error {
 
 			// Recreate the VRG ManifestWork for the secondary. This typically happens during Hub Recovery.
 			if errors.IsNotFound(err) {
-				err := d.createVolSyncDestManifestWork(clusterName)
+				err := d.createVolSyncDestManifestWork(clusterToSkip)
 				if err != nil {
 					return err
 				}
@@ -1998,7 +1999,7 @@ func (d *DRPCInstance) ensureVRGDeleted(clusterName string) bool {
 }
 
 func (d *DRPCInstance) updateVRGState(clusterName string, state rmn.ReplicationState) (bool, error) {
-	d.log.Info(fmt.Sprintf("Updating VRG ReplicationState to secondary for cluster %s", clusterName))
+	d.log.Info(fmt.Sprintf("Updating VRG ReplicationState to %s for cluster %s", state, clusterName))
 
 	vrg, err := d.getVRGFromManifestWork(clusterName)
 	if err != nil {
