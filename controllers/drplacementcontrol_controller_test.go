@@ -1767,6 +1767,7 @@ func verifyInitialDRPCDeployment(userPlacement client.Object, preferredCluster s
 	Expect(len(latestDRPC.Status.Conditions)).To(Equal(2))
 	_, condition := getDRPCCondition(&latestDRPC.Status, rmn.ConditionAvailable)
 	Expect(condition.Reason).To(Equal(string(rmn.Deployed)))
+	Expect(latestDRPC.GetAnnotations()[controllers.DRPCAppNamespace]).To(Equal(getVRGNameSpace()))
 }
 
 func verifyFailoverToSecondary(placementObj client.Object, toCluster string,

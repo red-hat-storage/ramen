@@ -30,6 +30,9 @@ const (
 	// Annotations for MW and PlacementRule
 	DRPCNameAnnotation      = "drplacementcontrol.ramendr.openshift.io/drpc-name"
 	DRPCNamespaceAnnotation = "drplacementcontrol.ramendr.openshift.io/drpc-namespace"
+
+	// Annotation for application namespace on the managed cluster
+	DRPCAppNamespace = "drplacementcontrol.ramendr.openshift.io/app-namespace"
 )
 
 var (
@@ -282,7 +285,7 @@ func (d *DRPCInstance) startDeploying(homeCluster, homeClusterNamespace string) 
 
 	// All good, update the preferred decision and state
 	d.instance.Status.PreferredDecision.ClusterName = d.instance.Spec.PreferredCluster
-	d.instance.Status.PreferredDecision.ClusterNamespace = d.vrgNamespace
+	d.instance.Status.PreferredDecision.ClusterNamespace = d.instance.Spec.PreferredCluster
 
 	d.log.Info("Updated PreferredDecision", "PreferredDecision", d.instance.Status.PreferredDecision)
 
@@ -1324,7 +1327,7 @@ func (d *DRPCInstance) updatePreferredDecision() {
 		reflect.DeepEqual(d.instance.Status.PreferredDecision, plrv1.PlacementDecision{}) {
 		d.instance.Status.PreferredDecision = plrv1.PlacementDecision{
 			ClusterName:      d.instance.Spec.PreferredCluster,
-			ClusterNamespace: d.vrgNamespace,
+			ClusterNamespace: d.instance.Spec.PreferredCluster,
 		}
 	}
 }
