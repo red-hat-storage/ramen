@@ -2,6 +2,9 @@ module github.com/ramendr/ramen
 
 go 1.21.6
 
+// This replace should always be here for ease of development.
+replace github.com/ramendr/ramen/api => ./api
+
 require (
 	github.com/aws/aws-sdk-go v1.44.289
 	github.com/backube/volsync v0.7.1
@@ -17,7 +20,6 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.16.0
 	github.com/prometheus/client_model v0.4.0
-	github.com/ramendr/ramen/api v0.0.0-20240206180233-85b38535230a
 	github.com/ramendr/recipe v0.0.0-20230817160432-729dc7fd8932
 	github.com/stolostron/multicloud-operators-foundation v0.0.0-20220315092956-6dc184852d56
 	github.com/stolostron/multicloud-operators-placementrule v1.2.4-1-20220311-8eedb3f.0.20230828200208-cd3c119a7fa0
