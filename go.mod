@@ -97,8 +97,6 @@ require (
 // replace directives to accommodate for stolostron
 replace k8s.io/client-go v12.0.0+incompatible => k8s.io/client-go v0.29.0
 
-replace github.com/ramendr/ramen/api => ./api
-
 replace (
 	github.com/open-cluster-management-io/api => open-cluster-management.io/api v0.10.0
 	github.com/openshift/hive => github.com/openshift/hive v1.1.17-0.20220223000051-b1c8fa5853b1
