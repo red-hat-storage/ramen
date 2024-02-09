@@ -38,7 +38,7 @@ IMAGE_NAME ?= ramen
 IMAGE_TAG ?= latest
 PLATFORM ?= k8s
 IMAGE_TAG_BASE = $(IMAGE_REGISTRY)/$(IMAGE_REPOSITORY)/$(IMAGE_NAME)
-RBAC_PROXY_IMG ?= "gcr.io/kubebuilder/kube-rbac-proxy:v0.13.0"
+RBAC_PROXY_IMG ?= "gcr.io/kubebuilder/kube-rbac-proxy:v0.13.1"
 OPERATOR_SUGGESTED_NAMESPACE ?= ramen-system
 AUTO_CONFIGURE_DR_CLUSTER ?= true
 KUBE_OBJECT_PROTECTION_DISABLED ?= false
@@ -126,7 +126,7 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 
 .PHONY: golangci-bin
 golangci-bin:
-	hack/install-golangci-lint.sh
+	@hack/install-golangci-lint.sh
 
 .PHONY: lint
 lint: golangci-bin ## Run configured golangci-lint and pre-commit.sh linters against the code.
@@ -255,48 +255,20 @@ undeploy-dr-cluster: kustomize ## Undeploy dr-cluster controller from the K8s cl
 ##@ Tools
 
 CONTROLLER_GEN = $(shell pwd)/bin/controller-gen
-controller_gen_version=v0.9.2
 controller-gen: ## Download controller-gen locally if necessary.
-	@test '$(shell $(CONTROLLER_GEN) --version)' = 'Version: $(controller_gen_version)' ||\
-	$(call go-get-tool,sigs.k8s.io/controller-tools/cmd/controller-gen@$(controller_gen_version))
+	@hack/install-controller-gen.sh
 
+.PHONY: kustomize
 KUSTOMIZE = $(shell pwd)/bin/kustomize
 kustomize: ## Download kustomize locally if necessary.
-	@test -f $(KUSTOMIZE) ||\
-	$(call go-get-tool,sigs.k8s.io/kustomize/kustomize/v4@v4.5.7)
-
-# go-get-tool will 'go get' any package $1 and install it to bin/.
-PROJECT_DIR := $(shell dirname $(abspath $(lastword $(MAKEFILE_LIST))))
-define go-get-tool
-{ \
-set -e ;\
-TMP_DIR=$$(mktemp -d) ;\
-cd $$TMP_DIR ;\
-go mod init tmp ;\
-echo "Downloading $(1)" ;\
-GOBIN=$(PROJECT_DIR)/bin go install $(1) ;\
-rm -rf $$TMP_DIR ;\
-}
-endef
+	@hack/install-kustomize.sh
 
 ##@ Bundle
 
 .PHONY: operator-sdk
 OSDK = ./bin/operator-sdk
 operator-sdk: ## Download operator-sdk locally if necessary.
-ifeq (,$(wildcard $(OSDK)))
-ifeq (,$(shell which operator-sdk 2>/dev/null))
-	@{ \
-	set -e ;\
-	mkdir -p $(dir $(OSDK)) ;\
-	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
-	curl -sSLo $(OSDK) https://github.com/operator-framework/operator-sdk/releases/download/v1.24.0/operator-sdk_$${OS}_$${ARCH} ;\
-	chmod +x $(OSDK) ;\
-	}
-else
-OSDK = $(shell which operator-sdk)
-endif
-endif
+	@hack/install-operator-sdk.sh
 
 .PHONY: bundle
 bundle: bundle-hub bundle-dr-cluster ## Generate all bundle manifests and metadata, then validate generated files.
@@ -355,19 +327,7 @@ bundle-dr-cluster-push: ## Push the dr-cluster bundle image.
 .PHONY: opm
 OPM = ./bin/opm
 opm: ## Download opm locally if necessary.
-ifeq (,$(wildcard $(OPM)))
-ifeq (,$(shell which opm 2>/dev/null))
-	@{ \
-	set -e ;\
-	mkdir -p $(dir $(OPM)) ;\
-	OS=$(shell go env GOOS) && ARCH=$(shell go env GOARCH) && \
-	curl -sSLo $(OPM) https://github.com/operator-framework/operator-registry/releases/download/v1.23.2/$${OS}-$${ARCH}-opm ;\
-	chmod +x $(OPM) ;\
-	}
-else
-OPM = $(shell which opm)
-endif
-endif
+	@./hack/install-opm.sh
 
 # A comma-separated list of bundle images (e.g. make catalog-build BUNDLE_IMGS=example.com/operator-bundle:v0.1.0,example.com/operator-bundle:v0.2.0).
 # These images MUST exist in a registry and be pull-able.
