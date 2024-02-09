@@ -30,10 +30,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	argov1alpha1 "github.com/argoproj/argo-cd/v2/pkg/apis/application/v1alpha1"
 	clrapiv1beta1 "github.com/open-cluster-management-io/api/cluster/v1beta1"
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
-	argocdv1alpha1hack "github.com/ramendr/ramen/controllers/argocd"
 	rmnutil "github.com/ramendr/ramen/controllers/util"
 	"github.com/ramendr/ramen/controllers/volsync"
 )
@@ -561,84 +562,79 @@ func DRPCsFailingOverToClusterForPolicy(
 func (r *DRPlacementControlReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	mwPred := ManifestWorkPredicateFunc()
 
-	mwMapFun := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(
-		func(ctx context.Context, obj client.Object) []reconcile.Request {
-			mw, ok := obj.(*ocmworkv1.ManifestWork)
-			if !ok {
-				return []reconcile.Request{}
-			}
+	mwMapFun := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(func(obj client.Object) []reconcile.Request {
+		mw, ok := obj.(*ocmworkv1.ManifestWork)
+		if !ok {
+			return []reconcile.Request{}
+		}
 
-			ctrl.Log.Info(fmt.Sprintf("DRPC: Filtering ManifestWork (%s/%s)", mw.Name, mw.Namespace))
+		ctrl.Log.Info(fmt.Sprintf("DRPC: Filtering ManifestWork (%s/%s)", mw.Name, mw.Namespace))
 
-			return filterMW(mw)
-		}))
+		return filterMW(mw)
+	}))
 
 	mcvPred := ManagedClusterViewPredicateFunc()
 
-	mcvMapFun := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(
-		func(ctx context.Context, obj client.Object) []reconcile.Request {
-			mcv, ok := obj.(*viewv1beta1.ManagedClusterView)
-			if !ok {
-				return []reconcile.Request{}
-			}
+	mcvMapFun := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(func(obj client.Object) []reconcile.Request {
+		mcv, ok := obj.(*viewv1beta1.ManagedClusterView)
+		if !ok {
+			return []reconcile.Request{}
+		}
 
-			ctrl.Log.Info(fmt.Sprintf("DRPC: Filtering MCV (%s/%s)", mcv.Name, mcv.Namespace))
+		ctrl.Log.Info(fmt.Sprintf("DRPC: Filtering MCV (%s/%s)", mcv.Name, mcv.Namespace))
 
-			return filterMCV(mcv)
-		}))
+		return filterMCV(mcv)
+	}))
 
 	usrPlRulePred := PlacementRulePredicateFunc()
 
-	usrPlRuleMapFun := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(
-		func(ctx context.Context, obj client.Object) []reconcile.Request {
-			usrPlRule, ok := obj.(*plrv1.PlacementRule)
-			if !ok {
-				return []reconcile.Request{}
-			}
+	usrPlRuleMapFun := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(func(obj client.Object) []reconcile.Request {
+		usrPlRule, ok := obj.(*plrv1.PlacementRule)
+		if !ok {
+			return []reconcile.Request{}
+		}
 
-			ctrl.Log.Info(fmt.Sprintf("DRPC: Filtering User PlacementRule (%s/%s)", usrPlRule.Name, usrPlRule.Namespace))
+		ctrl.Log.Info(fmt.Sprintf("DRPC: Filtering User PlacementRule (%s/%s)", usrPlRule.Name, usrPlRule.Namespace))
 
-			return filterUsrPlRule(usrPlRule)
-		}))
+		return filterUsrPlRule(usrPlRule)
+	}))
 
 	usrPlmntPred := PlacementPredicateFunc()
 
-	usrPlmntMapFun := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(
-		func(ctx context.Context, obj client.Object) []reconcile.Request {
-			usrPlmnt, ok := obj.(*clrapiv1beta1.Placement)
-			if !ok {
-				return []reconcile.Request{}
-			}
+	usrPlmntMapFun := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(func(obj client.Object) []reconcile.Request {
+		usrPlmnt, ok := obj.(*clrapiv1beta1.Placement)
+		if !ok {
+			return []reconcile.Request{}
+		}
 
-			ctrl.Log.Info(fmt.Sprintf("DRPC: Filtering User Placement (%s/%s)", usrPlmnt.Name, usrPlmnt.Namespace))
+		ctrl.Log.Info(fmt.Sprintf("DRPC: Filtering User Placement (%s/%s)", usrPlmnt.Name, usrPlmnt.Namespace))
 
-			return filterUsrPlmnt(usrPlmnt)
-		}))
+		return filterUsrPlmnt(usrPlmnt)
+	}))
 
 	drClusterPred := DRClusterPredicateFunc()
 
-	drClusterMapFun := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(
-		func(ctx context.Context, obj client.Object) []reconcile.Request {
-			drCluster, ok := obj.(*rmn.DRCluster)
-			if !ok {
-				return []reconcile.Request{}
-			}
+	drClusterMapFun := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(func(obj client.Object) []reconcile.Request {
+		drCluster, ok := obj.(*rmn.DRCluster)
+		if !ok {
+			return []reconcile.Request{}
+		}
 
-			ctrl.Log.Info(fmt.Sprintf("DRPC Map: Filtering DRCluster (%s)", drCluster.Name))
+		ctrl.Log.Info(fmt.Sprintf("DRPC Map: Filtering DRCluster (%s)", drCluster.Name))
 
-			return r.FilterDRCluster(drCluster)
-		}))
+		return r.FilterDRCluster(drCluster)
+	}))
 
 	r.eventRecorder = rmnutil.NewEventReporter(mgr.GetEventRecorderFor("controller_DRPlacementControl"))
 
 	return ctrl.NewControllerManagedBy(mgr).
 		WithOptions(ctrlcontroller.Options{MaxConcurrentReconciles: getMaxConcurrentReconciles(ctrl.Log)}).
 		For(&rmn.DRPlacementControl{}).
-		Watches(&ocmworkv1.ManifestWork{}, mwMapFun, builder.WithPredicates(mwPred)).
-		Watches(&viewv1beta1.ManagedClusterView{}, mcvMapFun, builder.WithPredicates(mcvPred)).
-		Watches(&plrv1.PlacementRule{}, usrPlRuleMapFun, builder.WithPredicates(usrPlRulePred)).
-		Watches(&clrapiv1beta1.Placement{}, usrPlmntMapFun, builder.WithPredicates(usrPlmntPred)).
-		Watches(&rmn.DRCluster{}, drClusterMapFun, builder.WithPredicates(drClusterPred)).
+		Watches(&source.Kind{Type: &ocmworkv1.ManifestWork{}}, mwMapFun, builder.WithPredicates(mwPred)).
+		Watches(&source.Kind{Type: &viewv1beta1.ManagedClusterView{}}, mcvMapFun, builder.WithPredicates(mcvPred)).
+		Watches(&source.Kind{Type: &plrv1.PlacementRule{}}, usrPlRuleMapFun, builder.WithPredicates(usrPlRulePred)).
+		Watches(&source.Kind{Type: &clrapiv1beta1.Placement{}}, usrPlmntMapFun, builder.WithPredicates(usrPlmntPred)).
+		Watches(&source.Kind{Type: &rmn.DRCluster{}}, drClusterMapFun, builder.WithPredicates(drClusterPred)).
 		Complete(r)
 }
 
@@ -2025,7 +2021,7 @@ func getApplicationDestinationNamespace(
 	log logr.Logger,
 	placement client.Object,
 ) (string, error) {
-	appSetList := argocdv1alpha1hack.ApplicationSetList{}
+	appSetList := argov1alpha1.ApplicationSetList{}
 	if err := client.List(context.TODO(), &appSetList); err != nil {
 		// If ApplicationSet CRD is not found in the API server,
 		// default to Subscription behavior, and return the placement namespace as the target VRG namespace
