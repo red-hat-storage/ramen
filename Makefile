@@ -135,7 +135,7 @@ lint: golangci-bin ## Run configured golangci-lint and pre-commit.sh linters aga
 
 envtest:
 	mkdir -p $(ENVTEST_ASSETS_DIR)
-	test -s $(ENVTEST_ASSETS_DIR)/setup-envtest || GOBIN=$(ENVTEST_ASSETS_DIR) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+	test -s $(ENVTEST_ASSETS_DIR)/setup-envtest || GOBIN=$(ENVTEST_ASSETS_DIR) go install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.17
 
 test: generate manifests envtest ## Run tests.
 	KUBEBUILDER_ASSETS=$(KUBEBUILDER_ASSETS) go test ./... -coverprofile cover.out $(GO_TEST_GINKGO_ARGS)
