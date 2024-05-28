@@ -173,6 +173,9 @@ test-drpc: generate manifests envtest ## Run DRPlacementControl tests.
 test-drcluster: generate manifests envtest ## Run DRCluster tests.
 	 go test ./controllers -coverprofile cover.out  -ginkgo.focus DRClusterController
 
+test-drpolicy: generate manifests envtest ## Run DRPolicy tests.
+	 go test ./controllers -coverprofile cover.out  -ginkgo.focus DRPolicyController
+
 test-util: generate manifests envtest ## Run util tests.
 	 go test ./controllers/util -coverprofile cover.out
 
@@ -186,7 +189,7 @@ test-ramenctl: ## Run ramenctl tests.
 	$(MAKE) -C ramenctl
 
 e2e-rdr: generate manifests ## Run rdr-e2e tests.
-	./e2e/rdr-e2e.sh
+	cd e2e && ./e2e-rdr.sh
 
 coverage:
 	go tool cover -html=cover.out
