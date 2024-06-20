@@ -275,12 +275,15 @@ func (d *DRPCInstance) getCachedVRG(clusterName string) *rmn.VolumeReplicationGr
 }
 
 func (d *DRPCInstance) isVRGAlreadyDeployedElsewhere(clusterToSkip string) (string, bool) {
-	for clusterName := range d.vrgs {
+	for clusterName, vrg := range d.vrgs {
 		if clusterName == clusterToSkip {
 			continue
 		}
 
-		return clusterName, true
+		// We are checking for the initial deployment. Only return the cluster if the VRG on it is primary.
+		if isVRGPrimary(vrg) {
+			return clusterName, true
+		}
 	}
 
 	return "", false
@@ -2275,6 +2278,13 @@ func (d *DRPCInstance) shouldUpdateStatus() bool {
 
 	if vrg.Status.LastGroupSyncBytes != d.instance.Status.LastGroupSyncBytes {
 		return true
+	}
+
+	if vrg.Status.KubeObjectProtection.CaptureToRecoverFrom != nil {
+		vrgKubeObjectProtectionTime := vrg.Status.KubeObjectProtection.CaptureToRecoverFrom.EndTime
+		if !vrgKubeObjectProtectionTime.Equal(d.instance.Status.LastKubeObjectProtectionTime) {
+			return true
+		}
 	}
 
 	return !reflect.DeepEqual(d.instance.Status.ResourceConditions.Conditions, vrg.Status.Conditions)
