@@ -67,7 +67,7 @@ environment.
 1. Install the `virtctl` tool
 
    ```
-   curl -L -o virtctl https://github.com/kubevirt/kubevirt/releases/download/v1.2.1/virtctl-v1.2.1-linux-amd64
+   curl -L -o virtctl https://github.com/kubevirt/kubevirt/releases/download/v1.3.0/virtctl-v1.3.0-linux-amd64
    sudo install virtctl /usr/local/bin
    rm virtctl
    ```
@@ -106,6 +106,16 @@ environment.
    ```
 
    For more info see [argocd installation](https://argo-cd.readthedocs.io/en/stable/cli_installation/)
+
+1. Install the `kubectl-gather` plugin
+
+   ```
+   curl -L -o kubectl-gather https://github.com/nirs/kubectl-gather/releases/download/v0.4.1/kubectl-gather-v0.4.1-linux-amd64
+   sudo install kubectl-gather /usr/local/bin
+   rm kubectl-gather
+   ```
+
+   For more info see [kubectl-gather](https://github.com/nirs/kubectl-gather)
 
 ### Testing that drenv is healthy
 
