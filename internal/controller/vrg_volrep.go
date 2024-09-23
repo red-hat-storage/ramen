@@ -1558,34 +1558,35 @@ func (v *VRGInstance) checkResyncCompletionAsSecondary(volRep *volrep.VolumeRepl
 	return true
 }
 
+// isVRConditionMet returns true if the condition is met, and an error mesage if we could not get the
+// condition value.
 func isVRConditionMet(volRep *volrep.VolumeReplication,
 	conditionType string,
 	desiredStatus metav1.ConditionStatus,
 ) (bool, string) {
 	volRepCondition := findCondition(volRep.Status.Conditions, conditionType)
 	if volRepCondition == nil {
-		msg := fmt.Sprintf("Failed to get the %s condition from status of VolumeReplication resource.", conditionType)
+		errorMsg := fmt.Sprintf("Failed to get the %s condition from status of VolumeReplication resource.",
+			conditionType)
 
-		return false, msg
+		return false, errorMsg
 	}
 
 	if volRep.Generation != volRepCondition.ObservedGeneration {
-		msg := fmt.Sprintf("Stale generation for condition %s from status of VolumeReplication resource.", conditionType)
+		errorMsg := fmt.Sprintf("Stale generation for condition %s from status of VolumeReplication resource.",
+			conditionType)
 
-		return false, msg
+		return false, errorMsg
 	}
 
 	if volRepCondition.Status == metav1.ConditionUnknown {
-		msg := fmt.Sprintf("Unknown status for condition %s from status of VolumeReplication resource.", conditionType)
+		errorMsg := fmt.Sprintf("Unknown status for condition %s from status of VolumeReplication resource.",
+			conditionType)
 
-		return false, msg
+		return false, errorMsg
 	}
 
-	if volRepCondition.Status != desiredStatus {
-		return false, ""
-	}
-
-	return true, ""
+	return volRepCondition.Status == desiredStatus, ""
 }
 
 // Disabling unparam linter as currently every invokation of this
