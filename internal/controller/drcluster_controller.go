@@ -43,7 +43,7 @@ type DRClusterReconciler struct {
 	Scheme            *runtime.Scheme
 	MCVGetter         util.ManagedClusterViewGetter
 	ObjectStoreGetter ObjectStoreGetter
-	RateLimiter       *workqueue.TypedRateLimiter[reconcile.Request]
+	RateLimiter       *workqueue.RateLimiter
 }
 
 // DRCluster condition reasons

@@ -53,7 +53,7 @@ type VolumeReplicationGroupReconciler struct {
 	Scheme              *runtime.Scheme
 	eventRecorder       *rmnutil.EventReporter
 	kubeObjects         kubeobjects.RequestsManager
-	RateLimiter         *workqueue.TypedRateLimiter[reconcile.Request]
+	RateLimiter         *workqueue.RateLimiter
 	veleroCRsAreWatched bool
 }
 
@@ -65,11 +65,11 @@ func (r *VolumeReplicationGroupReconciler) SetupWithManager(
 
 	r.Log.Info("Adding VolumeReplicationGroup controller")
 
-	rateLimiter := workqueue.NewTypedMaxOfRateLimiter(
-		workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](1*time.Second, 1*time.Minute),
+	rateLimiter := workqueue.NewMaxOfRateLimiter(
+		workqueue.NewItemExponentialFailureRateLimiter(1*time.Second, 1*time.Minute),
 		// defaults from client-go
 		//nolint: gomnd
-		&workqueue.TypedBucketRateLimiter[reconcile.Request]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+		&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
 	)
 	if r.RateLimiter != nil {
 		rateLimiter = *r.RateLimiter

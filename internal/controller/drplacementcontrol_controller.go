@@ -83,7 +83,7 @@ type DRPlacementControlReconciler struct {
 	eventRecorder       *rmnutil.EventReporter
 	savedInstanceStatus rmn.DRPlacementControlStatus
 	ObjStoreGetter      ObjectStoreGetter
-	RateLimiter         *workqueue.TypedRateLimiter[reconcile.Request]
+	RateLimiter         *workqueue.RateLimiter
 }
 
 func ManifestWorkPredicateFunc() predicate.Funcs {
