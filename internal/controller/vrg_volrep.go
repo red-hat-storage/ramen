@@ -454,8 +454,6 @@ func (v *VRGInstance) preparePVCForVRDeletion(pvc *corev1.PersistentVolumeClaim,
 			pvc.Spec.VolumeName, pvc.Namespace, pvc.Name, v.instance.Namespace, v.instance.Name, err)
 	}
 
-	log.Info("Deleted ramen annotations from PersistentVolume", "pv", pv.Name)
-
 	ownerRemoved := rmnutil.ObjectOwnerUnsetIfSet(pvc, vrg)
 	// Remove VR finalizer from PVC and the annotation (PVC maybe left behind, so remove the annotation)
 	finalizerRemoved := controllerutil.RemoveFinalizer(pvc, PvcVRFinalizerProtected)
@@ -472,8 +470,8 @@ func (v *VRGInstance) preparePVCForVRDeletion(pvc *corev1.PersistentVolumeClaim,
 			pvc.Namespace, pvc.Name, v.instance.Namespace, v.instance.Name, err)
 	}
 
-	log1.Info("Deleted ramen annotations, labels, and finallizers from PersistentVolumeClaim",
-		"annotations", pvc.GetAnnotations(), "labels", pvc.GetLabels(), "finalizers", pvc.GetFinalizers())
+	log1.Info("PVC update for VR deletion",
+		"finalizers", pvc.GetFinalizers(), "labels", pvc.GetLabels(), "annotations", pvc.GetAnnotations())
 
 	return nil
 }
@@ -888,17 +886,14 @@ func (v *VRGInstance) undoPVCFinalizersAndPVRetention(pvc *corev1.PersistentVolu
 
 // reconcileMissingVR determines if VR is missing, and if missing completes other steps required for
 // reconciliation during deletion.
-//
-// VR can be missing:
-//   - if no VR was created post initial processing, by when VRG was deleted. In this case no PV was also
-//     uploaded, as VR is created first before PV is uploaded.
-//   - if VR was deleted in a prior reconcile, during VRG deletion, but steps post VR deletion were not
-//     completed, at this point a deleted VR is also not processed further (its generation would have been
-//     updated)
-//
-// Returns 2 booleans:
-//   - the first indicating if VR is missing or not, to enable further VR processing if needed
-//   - the next indicating any required requeue of the request, due to errors in determining VR presence
+// VR can be missing,
+// - if no VR was created post initial processing, by when VRG was deleted. In this case
+// no PV was also uploaded, as VR is created first before PV is uploaded.
+// - if VR was deleted in a prior reconcile, during VRG deletion, but steps post VR deletion were not
+// completed, at this point a deleted VR is also not processed further (its generation would have been updated)
+// Returns 2 booleans,
+// - the first indicating if VR is missing or not, to enable further VR processing if needed
+// - the next indicating any required requeue of the request, due to errors in determining VR presence
 func (v *VRGInstance) reconcileMissingVR(pvc *corev1.PersistentVolumeClaim, log logr.Logger) (bool, bool) {
 	const (
 		requeue   = true
@@ -915,7 +910,7 @@ func (v *VRGInstance) reconcileMissingVR(pvc *corev1.PersistentVolumeClaim, log 
 	err := v.reconciler.Get(v.ctx, vrNamespacedName, volRep)
 	if err == nil {
 		if rmnutil.ResourceIsDeleted(volRep) {
-			log.Info("Requeuing due to processing a deleted VR")
+			log.Info("Requeuing due to processing a VR under deletion")
 
 			return !vrMissing, requeue
 		}
@@ -929,7 +924,7 @@ func (v *VRGInstance) reconcileMissingVR(pvc *corev1.PersistentVolumeClaim, log 
 		return !vrMissing, requeue
 	}
 
-	log.Info("Unprotecting PVC as VR is missing")
+	log.Info("Preparing PVC as VR is detected as missing or deleted")
 
 	if err := v.preparePVCForVRDeletion(pvc, log); err != nil {
 		log.Info("Requeuing due to failure in preparing PersistentVolumeClaim for deletion",
@@ -1407,68 +1402,11 @@ func (v *VRGInstance) checkVRStatus(volRep *volrep.VolumeReplication) bool {
 }
 
 // validateVRStatus validates if the VolumeReplication resource has the desired status for the
-// current generation, deletion status, and repliaction state.
-//
-// We handle 3 cases:
-//   - Primary deleted VRG: If Validated condition exists and false, the VR will never complete and can be
-//     deleted safely. Otherwise Completed condition is checked.
-//   - Primary VRG: Completed condition is checked.
-//   - Secondary VRG: Completed, Degraded and Resyncing conditions are checked and ensured healthy.
+// current generation and returns true if so, false otherwise
+//   - When replication state is Primary, only Completed condition is checked.
+//   - When replication state is Secondary, all 3 conditions for Completed/Degraded/Resyncing is
+//     checked and ensured healthy.
 func (v *VRGInstance) validateVRStatus(volRep *volrep.VolumeReplication, state ramendrv1alpha1.ReplicationState) bool {
-	// Check validated for primary during VRG deletion.
-	if state == ramendrv1alpha1.Primary && rmnutil.ResourceIsDeleted(v.instance) {
-		validated, ok := v.validateVRValidatedStatus(volRep)
-		if !validated && ok {
-			v.log.Info(fmt.Sprintf("VolumeReplication %s/%s failed validation and can be deleted",
-				volRep.GetName(), volRep.GetNamespace()))
-
-			return true
-		}
-	}
-
-	// Check completed for both primary and secondary.
-	if !v.validateVRCompletedStatus(volRep, state) {
-		return false
-	}
-
-	// if primary, all checks are completed.
-	if state == ramendrv1alpha1.Secondary {
-		return v.validateAdditionalVRStatusForSecondary(volRep)
-	}
-
-	msg := "PVC in the VolumeReplicationGroup is ready for use"
-	v.updatePVCDataReadyCondition(volRep.Namespace, volRep.Name, VRGConditionReasonReady, msg)
-	v.updatePVCDataProtectedCondition(volRep.Namespace, volRep.Name, VRGConditionReasonReady, msg)
-	v.updatePVCLastSyncTime(volRep.Namespace, volRep.Name, volRep.Status.LastSyncTime)
-	v.updatePVCLastSyncDuration(volRep.Namespace, volRep.Name, volRep.Status.LastSyncDuration)
-	v.updatePVCLastSyncBytes(volRep.Namespace, volRep.Name, volRep.Status.LastSyncBytes)
-	v.log.Info(fmt.Sprintf("VolumeReplication resource %s/%s is ready for use", volRep.Name, volRep.Namespace))
-
-	return true
-}
-
-// validateVRValidatedStatus validates that VolumeReplicaion resource was validated.
-// Return 2 booleans
-// - validated: true if the condition is true, otherwise false
-// - ok: true if the check was succeesfull, false if the condition is missing, stale, or unknown.
-func (v *VRGInstance) validateVRValidatedStatus(
-	volRep *volrep.VolumeReplication,
-) (bool, bool) {
-	conditionMet, errorMsg := isVRConditionMet(volRep, volrep.ConditionValidated, metav1.ConditionTrue)
-	if errorMsg != "" {
-		v.log.Info(fmt.Sprintf("%s (VolRep: %s/%s)", errorMsg, volRep.GetName(), volRep.GetNamespace()))
-	}
-
-	return conditionMet, errorMsg == ""
-}
-
-// validateVRCompletedStatus validates if the VolumeReplication resource Completed condition is met and update
-// the PVC DataReady and Protected conditions.
-// Returns true if the condtion is true, false if the condition is missing, stale, ubnknown, of false.
-func (v *VRGInstance) validateVRCompletedStatus(
-	volRep *volrep.VolumeReplication,
-	state ramendrv1alpha1.ReplicationState,
-) bool {
 	var (
 		stateString string
 		action      string
@@ -1483,17 +1421,34 @@ func (v *VRGInstance) validateVRCompletedStatus(
 		action = "demoted"
 	}
 
+	// it should be completed
 	conditionMet, msg := isVRConditionMet(volRep, volrep.ConditionCompleted, metav1.ConditionTrue)
 	if !conditionMet {
 		defaultMsg := fmt.Sprintf("VolumeReplication resource for pvc not %s to %s", action, stateString)
 		v.updatePVCDataReadyConditionHelper(volRep.Namespace, volRep.Name, VRGConditionReasonError, msg,
 			defaultMsg)
+
 		v.updatePVCDataProtectedConditionHelper(volRep.Namespace, volRep.Name, VRGConditionReasonError, msg,
 			defaultMsg)
+
 		v.log.Info(fmt.Sprintf("%s (VolRep: %s/%s)", defaultMsg, volRep.Name, volRep.Namespace))
 
 		return false
 	}
+
+	// if primary, all checks are completed
+	if state == ramendrv1alpha1.Secondary {
+		return v.validateAdditionalVRStatusForSecondary(volRep)
+	}
+
+	msg = "PVC in the VolumeReplicationGroup is ready for use"
+	v.updatePVCDataReadyCondition(volRep.Namespace, volRep.Name, VRGConditionReasonReady, msg)
+	v.updatePVCDataProtectedCondition(volRep.Namespace, volRep.Name, VRGConditionReasonReady, msg)
+	v.updatePVCLastSyncTime(volRep.Namespace, volRep.Name, volRep.Status.LastSyncTime)
+	v.updatePVCLastSyncDuration(volRep.Namespace, volRep.Name, volRep.Status.LastSyncDuration)
+	v.updatePVCLastSyncBytes(volRep.Namespace, volRep.Name, volRep.Status.LastSyncBytes)
+	v.log.Info(fmt.Sprintf("VolumeReplication resource %s/%s is ready for use", volRep.Name,
+		volRep.Namespace))
 
 	return true
 }
@@ -1589,35 +1544,34 @@ func (v *VRGInstance) checkResyncCompletionAsSecondary(volRep *volrep.VolumeRepl
 	return true
 }
 
-// isVRConditionMet returns true if the condition is met, and an error mesage if we could not get the
-// condition value.
 func isVRConditionMet(volRep *volrep.VolumeReplication,
 	conditionType string,
 	desiredStatus metav1.ConditionStatus,
 ) (bool, string) {
 	volRepCondition := findCondition(volRep.Status.Conditions, conditionType)
 	if volRepCondition == nil {
-		errorMsg := fmt.Sprintf("Failed to get the %s condition from status of VolumeReplication resource.",
-			conditionType)
+		msg := fmt.Sprintf("Failed to get the %s condition from status of VolumeReplication resource.", conditionType)
 
-		return false, errorMsg
+		return false, msg
 	}
 
 	if volRep.Generation != volRepCondition.ObservedGeneration {
-		errorMsg := fmt.Sprintf("Stale generation for condition %s from status of VolumeReplication resource.",
-			conditionType)
+		msg := fmt.Sprintf("Stale generation for condition %s from status of VolumeReplication resource.", conditionType)
 
-		return false, errorMsg
+		return false, msg
 	}
 
 	if volRepCondition.Status == metav1.ConditionUnknown {
-		errorMsg := fmt.Sprintf("Unknown status for condition %s from status of VolumeReplication resource.",
-			conditionType)
+		msg := fmt.Sprintf("Unknown status for condition %s from status of VolumeReplication resource.", conditionType)
 
-		return false, errorMsg
+		return false, msg
 	}
 
-	return volRepCondition.Status == desiredStatus, ""
+	if volRepCondition.Status != desiredStatus {
+		return false, ""
+	}
+
+	return true, ""
 }
 
 // Disabling unparam linter as currently every invokation of this
@@ -1837,8 +1791,6 @@ func (v *VRGInstance) deleteVR(vrNamespacedName types.NamespacedName, log logr.L
 
 		return nil
 	}
-
-	v.log.Info("Deleted VolumeReplication resource %s/%s", vrNamespacedName.Namespace, vrNamespacedName.Name)
 
 	return v.ensureVRDeletedFromAPIServer(vrNamespacedName, log)
 }
