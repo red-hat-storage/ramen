@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clrapiv1beta1 "open-cluster-management.io/api/cluster/v1beta1"
 
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
@@ -297,7 +298,7 @@ func (d *DRPCInstance) startDeploying(homeCluster, homeClusterNamespace string) 
 	d.setProgression(rmn.ProgressionCreatingMW)
 	// Create VRG first, to leverage user PlacementRule decision to skip placement and move to cleanup
 	err := d.createVRGManifestWork(homeCluster, rmn.Primary)
-	if err != nil {
+	if err != nil && !errors.IsAlreadyExists(err) {
 		return false, err
 	}
 
@@ -874,7 +875,7 @@ func (d *DRPCInstance) RunRelocate() (bool, error) {
 		addOrUpdateCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
 			d.getConditionStatusForTypeAvailable(), string(d.instance.Status.Phase), errMsg)
 
-		return !done, fmt.Errorf(errMsg)
+		return !done, fmt.Errorf("%s", errMsg)
 	}
 
 	if d.getLastDRState() != rmn.Relocating && !d.validatePeerReady() {
@@ -935,8 +936,7 @@ func (d *DRPCInstance) ensureCleanupAndVolSyncReplicationSetup(srcCluster string
 	// in the MW, but the VRGs in the vrgs slice are fetched using MCV.
 	vrg, ok := d.vrgs[srcCluster]
 	if !ok || len(vrg.Spec.VolSync.RDSpec) != 0 {
-		return fmt.Errorf(fmt.Sprintf("Waiting for RDSpec count on cluster %s to go to zero. VRG OK? %v",
-			srcCluster, ok))
+		return fmt.Errorf("waiting for RDSpec count on cluster %s to go to zero. VRG OK? %v", srcCluster, ok)
 	}
 
 	err = d.EnsureCleanup(srcCluster)
@@ -1406,6 +1406,8 @@ func (d *DRPCInstance) moveVRGToSecondaryEverywhere() bool {
 }
 
 func (d *DRPCInstance) cleanupSecondaries(skipCluster string) (bool, error) {
+	d.log.Info("Cleaning up secondaries.")
+
 	for _, clusterName := range rmnutil.DRPolicyClusterNames(d.drPolicy) {
 		if skipCluster == clusterName {
 			continue
@@ -1511,29 +1513,49 @@ func (d *DRPCInstance) updatePreferredDecision() {
 	}
 }
 
+// createVRGManifestWork is called to create a new VRG ManifestWork on homeCluster
 func (d *DRPCInstance) createVRGManifestWork(homeCluster string, repState rmn.ReplicationState) error {
-	// TODO: check if VRG MW here as a less expensive way to validate if Namespace exists
 	err := d.ensureNamespaceManifestWork(homeCluster)
 	if err != nil {
 		return fmt.Errorf("createVRGManifestWork couldn't ensure namespace '%s' on cluster %s exists",
 			d.vrgNamespace, homeCluster)
 	}
 
+	// Safety latch to ensure VRG MW is not present
+	vrg, err := d.getVRGFromManifestWork(homeCluster)
+	if (err != nil && !errors.IsNotFound(err)) || vrg != nil {
+		if err != nil {
+			return fmt.Errorf("error (%w) determining ManifestWork for VolumeReplicationGroup resource "+
+				"exists on cluster %s", err, homeCluster)
+		}
+
+		if vrg.Spec.ReplicationState != repState {
+			return fmt.Errorf("ManifestWork for VolumeReplicationGroup resource "+
+				"exists with mismatching state (%s) on cluster %s",
+				vrg.Spec.ReplicationState, homeCluster)
+		}
+
+		return fmt.Errorf("VolumeReplicationGroup ManifestWork for cluster %s in state %s exists (%w)",
+			homeCluster, string(vrg.Spec.ReplicationState), errors.NewAlreadyExists(
+				schema.GroupResource{
+					Group:    rmn.GroupVersion.Group,
+					Resource: "VolumeReplicationGroup",
+				}, vrg.Name))
+	}
+
 	// create VRG ManifestWork
-	d.log.Info("Creating VRG ManifestWork",
+	d.log.Info("Creating VRG ManifestWork", "ReplicationState", repState,
 		"Last State:", d.getLastDRState(), "cluster", homeCluster)
 
-	vrg := d.generateVRG(homeCluster, repState)
-	vrg.Spec.VolSync.Disabled = d.volSyncDisabled
-
+	newVRG := d.newVRG(homeCluster, repState, nil)
 	annotations := make(map[string]string)
 
 	annotations[DRPCNameAnnotation] = d.instance.Name
 	annotations[DRPCNamespaceAnnotation] = d.instance.Namespace
 
-	if err := d.mwu.CreateOrUpdateVRGManifestWork(
+	if _, err := d.mwu.CreateOrUpdateVRGManifestWork(
 		d.instance.Name, d.vrgNamespace,
-		homeCluster, vrg, annotations); err != nil {
+		homeCluster, newVRG, annotations); err != nil {
 		d.log.Error(err, "failed to create or update VolumeReplicationGroup manifest")
 
 		return fmt.Errorf("failed to create or update VolumeReplicationGroup manifest in namespace %s (%w)", homeCluster, err)
@@ -1543,17 +1565,201 @@ func (d *DRPCInstance) createVRGManifestWork(homeCluster string, repState rmn.Re
 }
 
 // ensureVRGManifestWork ensures that the VRG ManifestWork exists and matches the current VRG state.
-// TODO: This may be safe only when the VRG is primary - check if callers use this correctly.
 func (d *DRPCInstance) ensureVRGManifestWork(homeCluster string) error {
 	d.log.Info("Ensure VRG ManifestWork",
 		"Last State:", d.getLastDRState(), "cluster", homeCluster)
 
-	cachedVrg := d.vrgs[homeCluster]
-	if cachedVrg == nil {
-		return fmt.Errorf("failed to get vrg from cluster %s", homeCluster)
+	mw, mwErr := d.mwu.FindManifestWorkByType(rmnutil.MWTypeVRG, homeCluster)
+	if mwErr != nil {
+		if errors.IsNotFound(mwErr) {
+			return fmt.Errorf("failed to find ManifestWork for VolumeReplicationGroup from cluster %s", homeCluster)
+		}
+
+		return fmt.Errorf("error (%w) in finding ManifestWork for VolumeReplicationGroup from cluster %s",
+			mwErr, homeCluster)
 	}
 
-	return d.createVRGManifestWork(homeCluster, cachedVrg.Spec.ReplicationState)
+	vrg, err := rmnutil.ExtractVRGFromManifestWork(mw)
+	if err != nil {
+		return fmt.Errorf("error extracting VRG from ManifestWork for cluster %s. Error: %w", homeCluster, err)
+	}
+
+	// Safety latch to ensure VRG to update is Primary
+	if vrg.Spec.ReplicationState != rmn.Primary {
+		return fmt.Errorf("invalid update for VolumeReplicationGroup in %s spec.replicationState on cluster %s",
+			vrg.Spec.ReplicationState, homeCluster)
+	}
+
+	// Safety latch to ensure a view exists for the existing VRG ManifestWork
+	if d.vrgs[homeCluster] == nil {
+		return fmt.Errorf("missing VolumeReplicationGroup view for cluster %s, while attempting to update an instance",
+			homeCluster)
+	}
+
+	d.updateVRGOptionalFields(vrg, d.vrgs[homeCluster], homeCluster)
+
+	return d.mwu.UpdateVRGManifestWork(vrg, mw)
+}
+
+// hasPeerClass finds a peer in the passed in list of peerClasses and returns true if a peer matches the passed in
+// storage class name and represents the cluster in the clusterIDs list
+// Also see peerClassMatchesPeer
+func hasPeerClass(vrgPeerClasses []rmn.PeerClass, scName string, clusterIDs []string) bool {
+	for peerClassVRGIdx := range vrgPeerClasses {
+		if (vrgPeerClasses[peerClassVRGIdx].StorageClassName == scName) &&
+			(slices.Equal(vrgPeerClasses[peerClassVRGIdx].ClusterIDs, clusterIDs)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// updatePeers see updateVRGDRTypeSpec
+func updatePeers(
+	vrgFromView *rmn.VolumeReplicationGroup,
+	vrgPeerClasses, policyPeerClasses []rmn.PeerClass,
+) []rmn.PeerClass {
+	peerClasses := vrgPeerClasses
+
+	for pvcIdx := range vrgFromView.Status.ProtectedPVCs {
+		for policyPeerClassIdx := range policyPeerClasses {
+			if policyPeerClasses[policyPeerClassIdx].StorageClassName ==
+				*vrgFromView.Status.ProtectedPVCs[pvcIdx].StorageClassName {
+				if hasPeerClass(
+					vrgPeerClasses,
+					*vrgFromView.Status.ProtectedPVCs[pvcIdx].StorageClassName,
+					policyPeerClasses[policyPeerClassIdx].ClusterIDs,
+				) {
+					break
+				}
+
+				peerClasses = append(
+					peerClasses,
+					policyPeerClasses[policyPeerClassIdx],
+				)
+			}
+		}
+	}
+
+	return peerClasses
+}
+
+// updateVRGAsyncSpec see updateVRGDRTypeSpec
+func (d *DRPCInstance) updateVRGAsyncSpec(vrgFromView, vrg *rmn.VolumeReplicationGroup) {
+	// vrg will be updated with final contents of asyncSpec
+	asyncSpec := d.newVRGSpecAsync()
+	if len(asyncSpec.PeerClasses) == 0 {
+		// Retain peerClasses from VRG
+		if vrg.Spec.Async != nil && len(vrg.Spec.Async.PeerClasses) != 0 {
+			asyncSpec.PeerClasses = vrg.Spec.Async.PeerClasses
+		}
+
+		vrg.Spec.Async = asyncSpec
+
+		return
+	}
+
+	// If there is no async spec in VRG, update it with generated spec
+	// NOTE: Cannot happen! VRG is type Async and is being updated so Async cannot be nil, this is just safety
+	if vrg.Spec.Async == nil {
+		vrg.Spec.Async = asyncSpec
+
+		return
+	}
+
+	asyncSpec.PeerClasses = updatePeers(vrgFromView, vrg.Spec.Async.PeerClasses, d.drPolicy.Status.Async.PeerClasses)
+
+	// TODO: prune peerClasses not in policy and not in use by VRG
+
+	vrg.Spec.Async = asyncSpec
+}
+
+// updateVRGSyncSpec see updateVRGDRTypeSpec
+func (d *DRPCInstance) updateVRGSyncSpec(vrgFromView, vrg *rmn.VolumeReplicationGroup) {
+	// vrg will be updated with final contents of syncSpec
+	syncSpec := d.newVRGSpecSync()
+	if len(syncSpec.PeerClasses) == 0 {
+		// Retain peerClasses from VRG
+		if vrg.Spec.Sync != nil && len(vrg.Spec.Sync.PeerClasses) != 0 {
+			syncSpec.PeerClasses = vrg.Spec.Sync.PeerClasses
+		}
+
+		vrg.Spec.Sync = syncSpec
+
+		return
+	}
+
+	// If there is no sync spec in VRG, update it with generated spec
+	// NOTE: Cannot happen! VRG is type Sync and is being updated so Sync cannot be nil, this is just safety
+	if vrg.Spec.Sync == nil {
+		vrg.Spec.Sync = syncSpec
+
+		return
+	}
+
+	syncSpec.PeerClasses = updatePeers(vrgFromView, vrg.Spec.Sync.PeerClasses, d.drPolicy.Status.Sync.PeerClasses)
+
+	// TODO: prune peerClasses not in policy and not in use by VRG
+
+	vrg.Spec.Sync = syncSpec
+}
+
+// updateVRGDRTypeSpec updates VRG Sync/Async spec based on the DR type.
+// Update works to ensure VRG is updated with peerClasses that it requires, based on reported PVCs that the VRG is
+// attempting to protect. If a VRG is attempting to protect a PVC for which is is lacking a peerClass and that is
+// available as part of the DRPolicy its peerClasses are updated. For existing peerClasses the VRG information is
+// not updated, this is done to avoid any protection mechanism conflicts. For example, if a VRG carried a peerClass
+// without the replicationID (ie it would choose to protect the PVC using Volsync and VolumeSnapshots), then it is not
+// updated with a peerClass that NOW supports native VolumeReplication, as that would void existing protection.
+// To change replication schemes a workload needs to be DR disabled and then reenabled to catch up to the latest
+// available peer information for an SC.
+func (d *DRPCInstance) updateVRGDRTypeSpec(vrgFromCluster, generatedVRG *rmn.VolumeReplicationGroup) {
+	switch d.drType {
+	case DRTypeSync:
+		d.updateVRGSyncSpec(vrgFromCluster, generatedVRG)
+	case DRTypeAsync:
+		d.updateVRGAsyncSpec(vrgFromCluster, generatedVRG)
+	}
+}
+
+// updateVRGOptionalFields ensures that the optional fields in the VRG object are up to date.
+// This function does not modify the following fields:
+//   - ObjectMeta.Name
+//   - ObjectMeta.Namespace
+//   - Spec.PVCSelector
+//   - Spec.ReplicationState
+//   - Spec.PrepareForFinalSync
+//   - Spec.RunFinalSync
+//   - Spec.VolSync.RDSpec
+//
+// These fields are either set during the initial creation of the VRG (e.g., name and namespace)
+// or updated as needed, such as the PrepareForFinalSync and RunFinalSync fields.
+func (d *DRPCInstance) updateVRGOptionalFields(vrg, vrgFromView *rmn.VolumeReplicationGroup, homeCluster string) {
+	vrg.ObjectMeta.Annotations = map[string]string{
+		DestinationClusterAnnotationKey: homeCluster,
+		DoNotDeletePVCAnnotation:        d.instance.GetAnnotations()[DoNotDeletePVCAnnotation],
+		DRPCUIDAnnotation:               string(d.instance.UID),
+		rmnutil.IsCGEnabledAnnotation:   d.instance.GetAnnotations()[rmnutil.IsCGEnabledAnnotation],
+	}
+
+	vrg.Spec.ProtectedNamespaces = d.instance.Spec.ProtectedNamespaces
+	vrg.Spec.S3Profiles = AvailableS3Profiles(d.drClusters)
+	vrg.Spec.KubeObjectProtection = d.instance.Spec.KubeObjectProtection
+	vrg.Spec.VolSync.Disabled = d.volSyncDisabled
+	d.setVRGAction(vrg)
+
+	// If vrgFromView nil, then vrg is newly generated, Sync/Async spec is updated unconditionally
+	if vrgFromView == nil {
+		switch d.drType {
+		case DRTypeSync:
+			vrg.Spec.Sync = d.newVRGSpecSync()
+		case DRTypeAsync:
+			vrg.Spec.Async = d.newVRGSpecAsync()
+		}
+	} else {
+		d.updateVRGDRTypeSpec(vrgFromView, vrg)
+	}
 }
 
 func (d *DRPCInstance) ensurePlacement(homeCluster string) error {
@@ -1588,58 +1794,42 @@ func (d *DRPCInstance) setVRGAction(vrg *rmn.VolumeReplicationGroup) {
 	vrg.Spec.Action = action
 }
 
-func (d *DRPCInstance) generateVRG(dstCluster string, repState rmn.ReplicationState) rmn.VolumeReplicationGroup {
+func (d *DRPCInstance) newVRG(
+	dstCluster string,
+	repState rmn.ReplicationState,
+	vrgFromView *rmn.VolumeReplicationGroup,
+) rmn.VolumeReplicationGroup {
 	vrg := rmn.VolumeReplicationGroup{
 		TypeMeta: metav1.TypeMeta{Kind: "VolumeReplicationGroup", APIVersion: "ramendr.openshift.io/v1alpha1"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      d.instance.Name,
 			Namespace: d.vrgNamespace,
-			Annotations: map[string]string{
-				DestinationClusterAnnotationKey: dstCluster,
-				DoNotDeletePVCAnnotation:        d.instance.GetAnnotations()[DoNotDeletePVCAnnotation],
-				DRPCUIDAnnotation:               string(d.instance.UID),
-				rmnutil.IsCGEnabledAnnotation:   d.instance.GetAnnotations()[rmnutil.IsCGEnabledAnnotation],
-			},
 		},
 		Spec: rmn.VolumeReplicationGroupSpec{
-			PVCSelector:          d.instance.Spec.PVCSelector,
-			ProtectedNamespaces:  d.instance.Spec.ProtectedNamespaces,
-			ReplicationState:     repState,
-			S3Profiles:           AvailableS3Profiles(d.drClusters),
-			KubeObjectProtection: d.instance.Spec.KubeObjectProtection,
+			PVCSelector:      d.instance.Spec.PVCSelector,
+			ReplicationState: repState,
 		},
 	}
 
-	d.setVRGAction(&vrg)
-	vrg.Spec.Async = d.generateVRGSpecAsync()
-	vrg.Spec.Sync = d.generateVRGSpecSync()
+	d.updateVRGOptionalFields(&vrg, vrgFromView, dstCluster)
 
 	return vrg
 }
 
-func (d *DRPCInstance) generateVRGSpecAsync() *rmn.VRGAsyncSpec {
-	if dRPolicySupportsRegional(d.drPolicy, d.drClusters) {
-		return &rmn.VRGAsyncSpec{
-			ReplicationClassSelector:         d.drPolicy.Spec.ReplicationClassSelector,
-			VolumeSnapshotClassSelector:      d.drPolicy.Spec.VolumeSnapshotClassSelector,
-			VolumeGroupSnapshotClassSelector: d.drPolicy.Spec.VolumeGroupSnapshotClassSelector,
-			SchedulingInterval:               d.drPolicy.Spec.SchedulingInterval,
-		}
+func (d *DRPCInstance) newVRGSpecAsync() *rmn.VRGAsyncSpec {
+	return &rmn.VRGAsyncSpec{
+		ReplicationClassSelector:         d.drPolicy.Spec.ReplicationClassSelector,
+		VolumeSnapshotClassSelector:      d.drPolicy.Spec.VolumeSnapshotClassSelector,
+		VolumeGroupSnapshotClassSelector: d.drPolicy.Spec.VolumeGroupSnapshotClassSelector,
+		SchedulingInterval:               d.drPolicy.Spec.SchedulingInterval,
+		PeerClasses:                      d.drPolicy.Status.Async.PeerClasses,
 	}
-
-	return nil
 }
 
-func (d *DRPCInstance) generateVRGSpecSync() *rmn.VRGSyncSpec {
-	if d.drType == DRTypeSync {
-		return &rmn.VRGSyncSpec{}
+func (d *DRPCInstance) newVRGSpecSync() *rmn.VRGSyncSpec {
+	return &rmn.VRGSyncSpec{
+		PeerClasses: d.drPolicy.Status.Sync.PeerClasses,
 	}
-
-	return nil
-}
-
-func dRPolicySupportsRegional(drpolicy *rmn.DRPolicy, drClusters []rmn.DRCluster) bool {
-	return rmnutil.DrpolicyRegionNamesAsASet(drpolicy, drClusters).Len() > 1
 }
 
 func dRPolicySupportsMetro(drpolicy *rmn.DRPolicy, drclusters []rmn.DRCluster) (
@@ -1760,7 +1950,7 @@ func (d *DRPCInstance) EnsureCleanup(clusterToSkip string) error {
 	}
 
 	if !clean {
-		msg := "cleaning secondaries"
+		msg := "cleaning up secondaries"
 		addOrUpdateCondition(&d.instance.Status.Conditions, rmn.ConditionPeerReady, d.instance.Generation,
 			metav1.ConditionFalse, rmn.ReasonCleaning, msg)
 
@@ -1775,8 +1965,7 @@ func (d *DRPCInstance) EnsureCleanup(clusterToSkip string) error {
 
 //nolint:gocognit
 func (d *DRPCInstance) cleanupForVolSync(clusterToSkip string) error {
-	d.log.Info("VolSync needs both VRGs. No need to clean up secondary")
-	d.log.Info("Ensure secondary on peer")
+	d.log.Info("VolSync needs both VRGs. Ensure secondary setup on peer")
 
 	peersReady := true
 
@@ -1793,7 +1982,7 @@ func (d *DRPCInstance) cleanupForVolSync(clusterToSkip string) error {
 
 			// Recreate the VRG ManifestWork for the secondary. This typically happens during Hub Recovery.
 			if errors.IsNotFound(err) {
-				err := d.createVolSyncDestManifestWork(clusterToSkip)
+				err := d.ensureVolSyncSetup(clusterToSkip)
 				if err != nil {
 					return err
 				}
