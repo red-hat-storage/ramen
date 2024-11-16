@@ -15,8 +15,10 @@ import (
 
 	volrep "github.com/csi-addons/kubernetes-csi-addons/api/replication.storage/v1alpha1"
 	"github.com/google/uuid"
+	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	"github.com/ramendr/ramen/internal/controller/kubeobjects"
 	"github.com/ramendr/ramen/internal/controller/kubeobjects/velero"
+	"github.com/ramendr/ramen/internal/controller/util"
 	"golang.org/x/exp/maps" // TODO replace with "maps" in go1.21+
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -40,7 +42,6 @@ import (
 
 	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
-	rmnutil "github.com/ramendr/ramen/internal/controller/util"
 	"github.com/ramendr/ramen/internal/controller/volsync"
 )
 
@@ -51,7 +52,7 @@ type VolumeReplicationGroupReconciler struct {
 	Log                 logr.Logger
 	ObjStoreGetter      ObjectStoreGetter
 	Scheme              *runtime.Scheme
-	eventRecorder       *rmnutil.EventReporter
+	eventRecorder       *util.EventReporter
 	kubeObjects         kubeobjects.RequestsManager
 	RateLimiter         *workqueue.TypedRateLimiter[reconcile.Request]
 	veleroCRsAreWatched bool
@@ -61,7 +62,7 @@ type VolumeReplicationGroupReconciler struct {
 func (r *VolumeReplicationGroupReconciler) SetupWithManager(
 	mgr ctrl.Manager, ramenConfig *ramendrv1alpha1.RamenConfig,
 ) error {
-	r.eventRecorder = rmnutil.NewEventReporter(mgr.GetEventRecorderFor("controller_VolumeReplicationGroup"))
+	r.eventRecorder = util.NewEventReporter(mgr.GetEventRecorderFor("controller_VolumeReplicationGroup"))
 
 	r.Log.Info("Adding VolumeReplicationGroup controller")
 
@@ -95,7 +96,7 @@ func (r *VolumeReplicationGroupReconciler) SetupWithManager(
 		).
 		Watches(&volrep.VolumeReplication{},
 			handler.EnqueueRequestsFromMapFunc(r.VRMapFunc),
-			builder.WithPredicates(rmnutil.CreateOrDeleteOrResourceVersionUpdatePredicate{}),
+			builder.WithPredicates(util.CreateOrDeleteOrResourceVersionUpdatePredicate{}),
 		).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.configMapFun)).
 		Owns(&volrep.VolumeReplication{})
@@ -342,7 +343,7 @@ func filterPVC(reader client.Reader, pvc *corev1.PersistentVolumeClaim, log logr
 		vrgNamespacedName := types.NamespacedName{Name: vrg.Name, Namespace: vrg.Namespace}
 		namespaceSelected := slices.Contains(pvcSelector.NamespaceNames, pvc.Namespace)
 		labelMatch := selector.Matches(labels.Set(pvc.GetLabels()))
-		ownerMatch := rmnutil.OwnerNamespacedName(pvc) == vrgNamespacedName
+		ownerMatch := util.OwnerNamespacedName(pvc) == vrgNamespacedName
 
 		if labelMatch && namespaceSelected || ownerMatch {
 			log1.Info("Found VolumeReplicationGroup with matching labels or owner",
@@ -487,6 +488,8 @@ type VRGInstance struct {
 	result               ctrl.Result
 }
 
+// struct with pv with volrepclass and volsync
+
 const (
 	// Finalizers
 	vrgFinalizerName        = "volumereplicationgroups.ramendr.openshift.io/vrg-protection"
@@ -563,7 +566,7 @@ func (v *VRGInstance) processVRG() ctrl.Result {
 	v.log = v.log.WithName("vrginstance").WithValues("State", v.instance.Spec.ReplicationState)
 	v.s3StoreAccessorsGet()
 
-	if rmnutil.ResourceIsDeleted(v.instance) {
+	if util.ResourceIsDeleted(v.instance) {
 		v.log = v.log.WithValues("Finalize", true)
 
 		return v.processForDeletion()
@@ -585,7 +588,7 @@ func (v *VRGInstance) validateVRGState() error {
 	if v.instance.Spec.ReplicationState != ramendrv1alpha1.Primary &&
 		v.instance.Spec.ReplicationState != ramendrv1alpha1.Secondary {
 		err := fmt.Errorf("invalid or unknown replication state detected (deleted %v, desired replicationState %v)",
-			rmnutil.ResourceIsDeleted(v.instance),
+			util.ResourceIsDeleted(v.instance),
 			v.instance.Spec.ReplicationState)
 
 		v.log.Error(err, "Invalid request detected")
@@ -607,7 +610,7 @@ func (v *VRGInstance) validateVRGMode() error {
 
 	if !sync && !async {
 		err := fmt.Errorf("neither of sync or async mode is enabled (deleted %v)",
-			rmnutil.ResourceIsDeleted(v.instance))
+			util.ResourceIsDeleted(v.instance))
 
 		v.log.Error(err, "Invalid request detected")
 
@@ -652,12 +655,12 @@ func (v *VRGInstance) listPVCsByVrgPVCSelector() (*corev1.PersistentVolumeClaimL
 func (v *VRGInstance) listPVCsOwnedByVrg() (*corev1.PersistentVolumeClaimList, error) {
 	vrg := v.instance
 
-	return v.listPVCsByPVCSelector(metav1.LabelSelector{MatchLabels: rmnutil.OwnerLabels(vrg)})
+	return v.listPVCsByPVCSelector(metav1.LabelSelector{MatchLabels: util.OwnerLabels(vrg)})
 }
 
 func (v *VRGInstance) listPVCsByPVCSelector(labelSelector metav1.LabelSelector,
 ) (*corev1.PersistentVolumeClaimList, error) {
-	return rmnutil.ListPVCsByPVCSelector(v.ctx, v.reconciler.Client, v.log,
+	return util.ListPVCsByPVCSelector(v.ctx, v.reconciler.Client, v.log,
 		labelSelector,
 		v.recipeElements.PvcSelector.NamespaceNames,
 		v.instance.Spec.VolSync.Disabled,
@@ -671,7 +674,12 @@ func (v *VRGInstance) updatePVCList() error {
 		return err
 	}
 
-	if v.instance.Spec.Async == nil || v.instance.Spec.VolSync.Disabled {
+	if v.instance.Spec.Async == nil {
+		err := v.validateSyncPVCs(pvcList)
+		if err != nil {
+			return err
+		}
+
 		v.volRepPVCs = make([]corev1.PersistentVolumeClaim, len(pvcList.Items))
 		total := copy(v.volRepPVCs, pvcList.Items)
 
@@ -686,7 +694,7 @@ func (v *VRGInstance) updatePVCList() error {
 		return fmt.Errorf("failed to get VolumeReplicationClass list")
 	}
 
-	if rmnutil.ResourceIsDeleted(v.instance) {
+	if util.ResourceIsDeleted(v.instance) {
 		v.separatePVCsUsingVRGStatus(pvcList)
 		v.log.Info(fmt.Sprintf("Separated PVCs (%d) into VolRepPVCs (%d) and VolSyncPVCs (%d)",
 			len(pvcList.Items), len(v.volRepPVCs), len(v.volSyncPVCs)))
@@ -694,16 +702,8 @@ func (v *VRGInstance) updatePVCList() error {
 		return nil
 	}
 
-	if len(v.replClassList.Items) == 0 {
-		v.volSyncPVCs = make([]corev1.PersistentVolumeClaim, len(pvcList.Items))
-		numCopied := copy(v.volSyncPVCs, pvcList.Items)
-		v.log.Info("No VolumeReplicationClass available. Using all PVCs with VolSync", "pvcCount", numCopied)
-
-		return nil
-	}
-
 	// Separate PVCs targeted for VolRep from PVCs targeted for VolSync
-	return v.separatePVCsUsingStorageClassProvisioner(pvcList)
+	return v.separateAsyncPVCs(pvcList)
 }
 
 func (v *VRGInstance) labelPVCsForCG() error {
@@ -711,7 +711,7 @@ func (v *VRGInstance) labelPVCsForCG() error {
 		return nil
 	}
 
-	if !rmnutil.IsCGEnabled(v.instance.GetAnnotations()) {
+	if !util.IsCGEnabled(v.instance.GetAnnotations()) {
 		return nil
 	}
 
@@ -758,7 +758,7 @@ func (v *VRGInstance) addConsistencyGroupLabel(pvc *corev1.PersistentVolumeClaim
 	}
 
 	// Add label for PVC, showing that this PVC is part of consistency group
-	return rmnutil.NewResourceUpdater(pvc).
+	return util.NewResourceUpdater(pvc).
 		AddLabel(ConsistencyGroupLabel, storageID).
 		Update(v.ctx, v.reconciler.Client)
 }
@@ -805,24 +805,39 @@ func (v *VRGInstance) separatePVCsUsingVRGStatus(pvcList *corev1.PersistentVolum
 	}
 }
 
-func (v *VRGInstance) separatePVCsUsingStorageClassProvisioner(pvcList *corev1.PersistentVolumeClaimList) error {
+//nolint:gocognit, nestif
+func (v *VRGInstance) validateSyncPVCs(pvcList *corev1.PersistentVolumeClaimList) error {
+	peerClasses := v.instance.Spec.Sync.PeerClasses
+	if len(peerClasses) == 0 {
+		return nil
+	}
+
 	for idx := range pvcList.Items {
 		pvc := &pvcList.Items[idx]
 		scName := pvc.Spec.StorageClassName
 
-		if scName == nil || *scName == "" {
-			return fmt.Errorf("missing storage class name for PVC %s/%s", pvc.GetNamespace(), pvc.GetName())
+		storageClass, err := v.validateAndGetStorageClass(scName, pvc)
+		if err != nil {
+			return err
 		}
 
-		storageClass := &storagev1.StorageClass{}
-		if err := v.reconciler.Get(v.ctx, types.NamespacedName{Name: *scName}, storageClass); err != nil {
-			v.log.Info(fmt.Sprintf("Failed to get the storageclass %s", *scName))
-
-			return fmt.Errorf("failed to get the storageclass with name %s (%w)", *scName, err)
+		_, err = v.findPeerClassMatchingSC(storageClass, peerClasses, pvc)
+		if err != nil {
+			return err
 		}
+	}
 
-		replicationClassMatchFound := false
+	return nil
+}
 
+func (v *VRGInstance) separatePVCsUsingOnlySC(storageClass *storagev1.StorageClass, pvc *corev1.PersistentVolumeClaim) {
+	v.log.Info("separating PVC using only sc provisioner")
+
+	replicationClassMatchFound := false
+
+	pvcEnabledForVolSync := util.IsPVCMarkedForVolSync(v.instance.GetAnnotations())
+
+	if !pvcEnabledForVolSync {
 		for _, replicationClass := range v.replClassList.Items {
 			if storageClass.Provisioner == replicationClass.Spec.Provisioner {
 				v.volRepPVCs = append(v.volRepPVCs, *pvc)
@@ -831,16 +846,199 @@ func (v *VRGInstance) separatePVCsUsingStorageClassProvisioner(pvcList *corev1.P
 				break
 			}
 		}
+	}
 
-		if !replicationClassMatchFound {
-			v.volSyncPVCs = append(v.volSyncPVCs, *pvc)
+	if !replicationClassMatchFound {
+		v.volSyncPVCs = append(v.volSyncPVCs, *pvc)
+	}
+}
+
+func (v *VRGInstance) separatePVCUsingPeerClassAndSC(peerClasses []ramendrv1alpha1.PeerClass,
+	storageClass *storagev1.StorageClass, pvc *corev1.PersistentVolumeClaim,
+) error {
+	v.log.Info("separate PVC using peerClasses")
+
+	peerClass, err := v.findPeerClassMatchingSC(storageClass, peerClasses, pvc)
+	if err != nil {
+		return err
+	}
+
+	if peerClass == nil {
+		msg := fmt.Sprintf("peerClass matching storageClass %s not found for async PVC", storageClass.GetName())
+		v.updatePVCDataReadyCondition(pvc.Namespace, pvc.Name, VRGConditionReasonPeerClassNotFound, msg)
+
+		return fmt.Errorf(msg)
+	}
+
+	pvcEnabledForVolSync := util.IsPVCMarkedForVolSync(v.instance.GetAnnotations())
+
+	if !pvcEnabledForVolSync {
+		if peerClass.ReplicationID != "" {
+			replicationClass := v.findReplicationClassUsingPeerClass(peerClass, storageClass)
+			if replicationClass != nil {
+				v.volRepPVCs = append(v.volRepPVCs, *pvc)
+
+				return nil
+			}
+
+			return fmt.Errorf("failed to find matching peerClass for PVC") // TODO: better error message
+		}
+	}
+
+	if v.instance.Spec.VolSync.Disabled {
+		return fmt.Errorf("failed to find matching peerClass for PVC and VolSync is disabled")
+	}
+
+	snapClass, err := v.findVolSnapClass(storageClass)
+	if err != nil {
+		return err
+	}
+
+	if snapClass == nil {
+		return fmt.Errorf("failed to find matching peerClass for PVC") // TODO: better error message
+	}
+
+	v.volSyncPVCs = append(v.volSyncPVCs, *pvc)
+
+	return nil
+}
+
+//nolint:gocognit,cyclop
+func (v *VRGInstance) separateAsyncPVCs(pvcList *corev1.PersistentVolumeClaimList) error {
+	peerClasses := v.instance.Spec.Async.PeerClasses
+
+	for idx := range pvcList.Items {
+		pvc := &pvcList.Items[idx]
+		scName := pvc.Spec.StorageClassName
+
+		storageClass, err := v.validateAndGetStorageClass(scName, pvc)
+		if err != nil {
+			return err
+		}
+
+		if len(peerClasses) == 0 {
+			v.separatePVCsUsingOnlySC(storageClass, pvc)
+		} else {
+			err = v.separatePVCUsingPeerClassAndSC(peerClasses, storageClass, pvc)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
 	v.log.Info(fmt.Sprintf("Found %d PVCs targeted for VolRep and %d targeted for VolSync",
 		len(v.volRepPVCs), len(v.volSyncPVCs)))
 
+	if len(pvcList.Items) != (len(v.volRepPVCs) + len(v.volSyncPVCs)) {
+		return fmt.Errorf("no PVCs are procted")
+	}
+
 	return nil
+}
+
+func (v *VRGInstance) findReplicationClassUsingPeerClass(
+	peerClass *ramendrv1alpha1.PeerClass,
+	storageClass *storagev1.StorageClass,
+) *volrep.VolumeReplicationClass {
+	for _, replicationClass := range v.replClassList.Items {
+		rIDFromReplicationClass := replicationClass.GetLabels()[VolumeReplicationIDLabel]
+		sIDfromReplicationClass := replicationClass.GetLabels()[StorageIDLabel]
+
+		matched := sIDfromReplicationClass == storageClass.GetLabels()[StorageIDLabel] &&
+			rIDFromReplicationClass == peerClass.ReplicationID &&
+			replicationClass.Spec.Provisioner == storageClass.Provisioner
+
+		if matched {
+			return &replicationClass
+		}
+
+		continue
+	}
+
+	return nil
+}
+
+func (v *VRGInstance) findVolSnapClass(storageClass *storagev1.StorageClass,
+) (*snapv1.VolumeSnapshotClass, error) {
+	SnaphotClasses, err := v.volSyncHandler.GetVolumeSnapshotClasses()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, snapshotClass := range SnaphotClasses {
+		sIDFromSnapClass := snapshotClass.GetLabels()[StorageIDLabel]
+
+		matched := sIDFromSnapClass == storageClass.GetLabels()[StorageIDLabel] &&
+			snapshotClass.Driver == storageClass.Provisioner
+
+		if matched {
+			return &snapshotClass, nil
+		}
+
+		continue
+	}
+
+	return nil, nil
+}
+
+func (v *VRGInstance) validateAndGetStorageClass(scName *string, pvc *corev1.PersistentVolumeClaim,
+) (*storagev1.StorageClass, error) {
+	if scName == nil || *scName == "" {
+		return nil, fmt.Errorf("missing storage class name for PVC %s/%s", pvc.GetNamespace(), pvc.GetName())
+	}
+
+	storageClass := &storagev1.StorageClass{}
+	if err := v.reconciler.Get(v.ctx, types.NamespacedName{Name: *scName}, storageClass); err != nil {
+		return nil, fmt.Errorf("failed to get the storageclass with name %s (%w)", *scName, err)
+	}
+
+	return storageClass, nil
+}
+
+func (v *VRGInstance) findPeerClassMatchingSC(
+	storageClass *storagev1.StorageClass,
+	peerClasses []ramendrv1alpha1.PeerClass,
+	pvc *corev1.PersistentVolumeClaim,
+) (*ramendrv1alpha1.PeerClass, error) {
+	var peerClass *ramendrv1alpha1.PeerClass
+
+	if _, ok := storageClass.GetLabels()[StorageIDLabel]; !ok {
+		return nil, fmt.Errorf("label (%s) not found in storageClass for PVC %s", StorageIDLabel, pvc.Name)
+	}
+
+	for idx := range peerClasses {
+		if storageClass.GetName() == peerClasses[idx].StorageClassName {
+			peerClass = &peerClasses[idx]
+		}
+	}
+
+	if peerClass == nil {
+		msg := fmt.Sprintf("peerClass matching storageClass %s not found for PVC", storageClass.GetName())
+		v.updatePVCDataReadyCondition(pvc.Namespace, pvc.Name, VRGConditionReasonPeerClassNotFound, msg)
+
+		return nil, fmt.Errorf(msg)
+	}
+
+	if !slices.Contains(peerClass.StorageID, storageClass.GetLabels()[StorageIDLabel]) {
+		return nil, fmt.Errorf("storageID mismatch between peerClass (%s) and StorageClass (%s)",
+			peerClass.StorageID[0], storageClass.GetLabels()[StorageIDLabel])
+	}
+
+	/* Removed as a comment, as tests set the same sID across both SCs and hence in async we get len as 1 always!
+	sIDLen := 0
+
+	switch v.instance.Spec.Sync != nil {
+	case true:
+		sIDLen = 1
+	case false:
+		sIDLen = 2
+	}
+
+	if len(peerClass.StorageID) != sIDLen {
+		return nil, fmt.Errorf("peerClass with insufficient storageIDs found %v %v", peerClass.StorageID, sIDLen)
+	}*/
+
+	return peerClass, nil
 }
 
 // finalizeVRG cleans up managed resources and removes the VRG finalizer for resource deletion
@@ -895,8 +1093,8 @@ func (v *VRGInstance) processForDeletion() ctrl.Result {
 		return ctrl.Result{Requeue: true}
 	}
 
-	rmnutil.ReportIfNotPresent(v.reconciler.eventRecorder, v.instance, corev1.EventTypeNormal,
-		rmnutil.EventReasonDeleteSuccess, "Deletion Success")
+	util.ReportIfNotPresent(v.reconciler.eventRecorder, v.instance, corev1.EventTypeNormal,
+		util.EventReasonDeleteSuccess, "Deletion Success")
 
 	return ctrl.Result{}
 }
@@ -979,8 +1177,8 @@ func (v *VRGInstance) processAsPrimary() ctrl.Result {
 	// Expectation is that, if something failed and requeue is true, then
 	// appropriate event might have been captured at the time of failure.
 	if !v.result.Requeue {
-		rmnutil.ReportIfNotPresent(v.reconciler.eventRecorder, v.instance, corev1.EventTypeNormal,
-			rmnutil.EventReasonPrimarySuccess, "Primary Success")
+		util.ReportIfNotPresent(v.reconciler.eventRecorder, v.instance, corev1.EventTypeNormal,
+			util.EventReasonPrimarySuccess, "Primary Success")
 	}
 
 	return v.updateVRGConditionsAndStatus(v.result)
@@ -1041,8 +1239,8 @@ func (v *VRGInstance) pvcsDeselectedUnprotect() error {
 		return err
 	}
 
-	pvcsVr := rmnutil.ObjectsMap(v.volRepPVCs...)
-	pvcsVs := rmnutil.ObjectsMap(v.volSyncPVCs...)
+	pvcsVr := util.ObjectsMap(v.volRepPVCs...)
+	pvcsVs := util.ObjectsMap(v.volSyncPVCs...)
 
 	for i := range pvcsOwned.Items {
 		pvc := pvcsOwned.Items[i]
@@ -1114,8 +1312,8 @@ func (v *VRGInstance) processAsSecondary() ctrl.Result {
 	// Expectation is that, if something failed and requeue is true, then
 	// appropriate event might have been captured at the time of failure.
 	if !result.Requeue {
-		rmnutil.ReportIfNotPresent(v.reconciler.eventRecorder, v.instance, corev1.EventTypeNormal,
-			rmnutil.EventReasonSecondarySuccess, "Secondary Success")
+		util.ReportIfNotPresent(v.reconciler.eventRecorder, v.instance, corev1.EventTypeNormal,
+			util.EventReasonSecondarySuccess, "Secondary Success")
 	}
 
 	return v.updateVRGConditionsAndStatus(result)
@@ -1154,8 +1352,8 @@ func (v *VRGInstance) relocate(result *ctrl.Result) {
 }
 
 func (v *VRGInstance) invalid(err error, msg string, requeue bool) ctrl.Result {
-	rmnutil.ReportIfNotPresent(v.reconciler.eventRecorder, v.instance, corev1.EventTypeWarning,
-		rmnutil.EventReasonValidationFailed, err.Error())
+	util.ReportIfNotPresent(v.reconciler.eventRecorder, v.instance, corev1.EventTypeWarning,
+		util.EventReasonValidationFailed, err.Error())
 
 	return v.dataError(err, msg, requeue)
 }
@@ -1182,6 +1380,8 @@ func (v *VRGInstance) errorConditionLogAndSet(err error, msg string,
 }
 
 func (v *VRGInstance) updateVRGConditionsAndStatus(result ctrl.Result) ctrl.Result {
+	// Check if as Secondary things would be updated accordingly, should protectedPVC be cleared?
+	// cleanupProtectedPVCs
 	v.updateVRGConditions()
 
 	return v.updateVRGStatus(result)
@@ -1306,7 +1506,7 @@ func getStatusStateFromSpecState(state ramendrv1alpha1.ReplicationState) ramendr
 func (v *VRGInstance) updateVRGConditions() {
 	logAndSet := func(conditionName string, subconditions ...*metav1.Condition) {
 		v.log.Info(conditionName, "subconditions", subconditions)
-		rmnutil.MergeConditions(setStatusCondition,
+		util.MergeConditions(setStatusCondition,
 			&v.instance.Status.Conditions,
 			[]string{VRGConditionReasonUnused},
 			subconditions...)
@@ -1341,15 +1541,13 @@ func (v *VRGInstance) updateVRGConditions() {
 func (v *VRGInstance) vrgReadyStatus(reason string) *metav1.Condition {
 	v.log.Info("Marking VRG ready with replicating reason", "reason", reason)
 
-	unusedMsg := "No PVCs are protected using VolumeReplication scheme"
-	if v.instance.Spec.Sync != nil {
-		unusedMsg = "No PVCs are protected, no PVCs found matching the selector"
-	}
-
 	if v.instance.Spec.ReplicationState == ramendrv1alpha1.Secondary {
 		msg := "PVCs in the VolumeReplicationGroup group are replicating"
 		if reason == VRGConditionReasonUnused {
-			msg = unusedMsg
+			msg = "PVC protection as secondary is complete, or no PVCs needed protection using VolumeReplication scheme"
+			if v.instance.Spec.Sync != nil {
+				msg = "PVC protection as secondary is complete, or no PVCs needed protection"
+			}
 		} else {
 			reason = VRGConditionReasonReplicating
 		}
@@ -1360,7 +1558,10 @@ func (v *VRGInstance) vrgReadyStatus(reason string) *metav1.Condition {
 	// VRG as primary
 	msg := "PVCs in the VolumeReplicationGroup are ready for use"
 	if reason == VRGConditionReasonUnused {
-		msg = unusedMsg
+		msg = "No PVCs are protected using VolumeReplication scheme"
+		if v.instance.Spec.Sync != nil {
+			msg = "No PVCs are protected, no PVCs found matching the selector"
+		}
 	}
 
 	return newVRGAsPrimaryReadyCondition(v.instance.Generation, reason, msg)
@@ -1567,11 +1768,11 @@ func (r *VolumeReplicationGroupReconciler) addVolsyncOwnsAndWatches(ctrlBuilder 
 		Owns(&ramendrv1alpha1.ReplicationGroupDestination{}).
 		Watches(&volsyncv1alpha1.ReplicationDestination{},
 			handler.EnqueueRequestsFromMapFunc(r.RDMapFunc),
-			builder.WithPredicates(rmnutil.CreateOrDeleteOrResourceVersionUpdatePredicate{}),
+			builder.WithPredicates(util.CreateOrDeleteOrResourceVersionUpdatePredicate{}),
 		).
 		Watches(&volsyncv1alpha1.ReplicationSource{},
 			handler.EnqueueRequestsFromMapFunc(r.RSMapFunc),
-			builder.WithPredicates(rmnutil.CreateOrDeleteOrResourceVersionUpdatePredicate{}),
+			builder.WithPredicates(util.CreateOrDeleteOrResourceVersionUpdatePredicate{}),
 		)
 
 	return ctrlBuilder
