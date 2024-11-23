@@ -5,6 +5,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -23,7 +24,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -414,7 +415,7 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 
 	// Fetch the VolumeReplicationGroup instance
 	if err := r.APIReader.Get(ctx, req.NamespacedName, v.instance); err != nil {
-		if errors.IsNotFound(err) {
+		if k8serrors.IsNotFound(err) {
 			log.Info("Resource not found")
 
 			return ctrl.Result{}, nil
@@ -884,7 +885,7 @@ func (v *VRGInstance) separatePVCUsingPeerClassAndSC(peerClasses []ramendrv1alph
 		msg := fmt.Sprintf("peerClass matching storageClass %s not found for async PVC", storageClass.GetName())
 		v.updatePVCDataReadyCondition(pvc.Namespace, pvc.Name, VRGConditionReasonPeerClassNotFound, msg)
 
-		return fmt.Errorf(msg)
+		return errors.New(msg)
 	}
 
 	pvcEnabledForVolSync := util.IsPVCMarkedForVolSync(v.instance.GetAnnotations())
@@ -1034,7 +1035,7 @@ func (v *VRGInstance) findPeerClassMatchingSC(
 		msg := fmt.Sprintf("peerClass matching storageClass %s not found for PVC", storageClass.GetName())
 		v.updatePVCDataReadyCondition(pvc.Namespace, pvc.Name, VRGConditionReasonPeerClassNotFound, msg)
 
-		return nil, fmt.Errorf(msg)
+		return nil, errors.New(msg)
 	}
 
 	if !slices.Contains(peerClass.StorageID, storageClass.GetLabels()[StorageIDLabel]) {
