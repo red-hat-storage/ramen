@@ -171,7 +171,6 @@ linters:
     - wastedassign
     - whitespace
     - wsl
-    #  - exhaustivestruct
     #  - gochecknoglobals
     #  - gochecknoinits
     #  - godot
