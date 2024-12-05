@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	defaultTimeoutValue = 300
-	pollInterval        = 100
+	defaultTimeoutValue       = 300
+	pollInterval              = 100
+	expectedNumberOfJSONPaths = 2
 )
 
 func EvaluateCheckHook(client client.Client, hook *kubeobjects.HookSpec, log logr.Logger) (bool, error) {
@@ -287,7 +288,7 @@ func parseBooleanExpression(booleanExpression string) (op string, jsonPaths []st
 
 		jsonPaths = trimLeadingTrailingWhiteSpace(exprs)
 
-		if len(exprs) == 2 &&
+		if len(exprs) == expectedNumberOfJSONPaths &&
 			IsValidJSONPathExpression(jsonPaths[0]) &&
 			IsValidJSONPathExpression(jsonPaths[1]) {
 			return op, jsonPaths, nil
