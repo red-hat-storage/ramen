@@ -459,6 +459,7 @@ func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSo
 
 				return err
 			}
+
 			rs.Spec.Trigger = &volsyncv1alpha1.ReplicationSourceTriggerSpec{
 				Schedule: scheduleCronSpec,
 			}
@@ -1181,6 +1182,7 @@ func (v *VSHandler) ensurePVCFromSnapshot(rdSpec ramendrv1alpha1.VolSyncReplicat
 
 			return nil
 		}
+
 		if pvc.Status.Phase == corev1.ClaimBound {
 			// PVC already bound at this point
 			l.V(1).Info("PVC already bound")
@@ -1367,6 +1369,7 @@ func (v *VSHandler) ModifyRSSpecForCephFS(rsSpec *ramendrv1alpha1.VolSyncReplica
 			readOnlyPVCStorageClass.Provisioner = storageClass.Provisioner
 
 			// Copy other parameters from the original storage class
+			// Note - not copying volumebindingmode or reclaim policy from the source storageclass will leave defaults
 			readOnlyPVCStorageClass.Parameters = map[string]string{}
 			for k, v := range storageClass.Parameters {
 				readOnlyPVCStorageClass.Parameters[k] = v
@@ -1374,8 +1377,6 @@ func (v *VSHandler) ModifyRSSpecForCephFS(rsSpec *ramendrv1alpha1.VolSyncReplica
 
 			// Set backingSnapshot parameter to true
 			readOnlyPVCStorageClass.Parameters["backingSnapshot"] = "true"
-
-			// Note - not copying volumebindingmode or reclaim policy from the source storageclass will leave defaults
 		}
 
 		return nil
