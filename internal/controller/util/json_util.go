@@ -241,7 +241,8 @@ func getMatchingPods(pList *corev1.PodList, re *regexp.Regexp) []client.Object {
 
 	for _, pod := range pList.Items {
 		if re.MatchString(pod.Name) {
-			objs = append(objs, &pod)
+			podCopy := pod
+			objs = append(objs, &podCopy)
 		}
 	}
 
@@ -253,7 +254,8 @@ func getMatchingDeployments(dList *appsv1.DeploymentList, re *regexp.Regexp) []c
 
 	for _, pod := range dList.Items {
 		if re.MatchString(pod.Name) {
-			objs = append(objs, &pod)
+			podCopy := pod
+			objs = append(objs, &podCopy)
 		}
 	}
 
@@ -265,7 +267,8 @@ func getMatchingStatefulSets(ssList *appsv1.StatefulSetList, re *regexp.Regexp) 
 
 	for _, pod := range ssList.Items {
 		if re.MatchString(pod.Name) {
-			objs = append(objs, &pod)
+			podCopy := pod
+			objs = append(objs, &podCopy)
 		}
 	}
 
