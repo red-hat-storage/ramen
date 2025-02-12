@@ -623,6 +623,21 @@ func (mwu *MWUtil) createOrUpdateManifestWork(
 	return nil
 }
 
+func (mwu *MWUtil) GetVRGManifestWorkCount(drClusters []string) int {
+	count := 0
+
+	for _, clusterName := range drClusters {
+		_, err := mwu.FindManifestWorkByType(MWTypeVRG, clusterName)
+		if err != nil {
+			continue
+		}
+
+		count++
+	}
+
+	return count
+}
+
 func (mwu *MWUtil) DeleteNamespaceManifestWork(clusterName string, annotations map[string]string) error {
 	mwName := mwu.BuildManifestWorkName(MWTypeNS)
 	mw := &ocmworkv1.ManifestWork{}

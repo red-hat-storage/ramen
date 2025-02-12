@@ -1700,7 +1700,7 @@ func getVRGsFromManagedClusters(
 
 		vrgs[drCluster.Name] = vrg
 
-		log.Info("VRG location", "VRG on", drCluster.Name, "replicationState", vrg.Spec.ReplicationState)
+		log.Info("VRG location", "VRG on", drCluster.Name)
 	}
 
 	// We are done if we successfully queried all drClusters
