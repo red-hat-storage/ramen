@@ -59,7 +59,6 @@ func (v *VRGInstance) restorePVsAndPVCsForVolSync() (int, error) {
 				protectedPVC = &ramendrv1alpha1.ProtectedPVC{}
 				rdSpec.ProtectedPVC.DeepCopyInto(protectedPVC)
 				v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, *protectedPVC)
-				protectedPVC = &v.instance.Status.ProtectedPVCs[len(v.instance.Status.ProtectedPVCs)-1]
 			}
 
 			setVRGConditionTypeVolSyncPVRestoreError(&protectedPVC.Conditions, v.instance.Generation,
@@ -75,7 +74,6 @@ func (v *VRGInstance) restorePVsAndPVCsForVolSync() (int, error) {
 			protectedPVC = &ramendrv1alpha1.ProtectedPVC{}
 			rdSpec.ProtectedPVC.DeepCopyInto(protectedPVC)
 			v.instance.Status.ProtectedPVCs = append(v.instance.Status.ProtectedPVCs, *protectedPVC)
-			protectedPVC = &v.instance.Status.ProtectedPVCs[len(v.instance.Status.ProtectedPVCs)-1]
 		}
 
 		setVRGConditionTypeVolSyncPVRestoreComplete(&protectedPVC.Conditions, v.instance.Generation, "PVC restored")
