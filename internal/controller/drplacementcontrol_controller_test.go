@@ -1021,8 +1021,7 @@ func createVRGMW(name, namespace, homeCluster string) {
 		TargetNamespace: namespace,
 	}
 
-	_, err := mwu.CreateOrUpdateVRGManifestWork(name, namespace, homeCluster, *vrg, nil)
-	Expect(err).To(Succeed())
+	Expect(mwu.CreateOrUpdateVRGManifestWork(name, namespace, homeCluster, *vrg, nil)).To(Succeed())
 }
 
 func updateManifestWorkStatus(clusterNamespace, vrgNamespace, mwType, workType string) {

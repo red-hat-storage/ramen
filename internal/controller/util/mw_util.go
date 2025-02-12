@@ -26,7 +26,6 @@ import (
 
 	csiaddonsv1alpha1 "github.com/csi-addons/kubernetes-csi-addons/api/csiaddons/v1alpha1"
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
-	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 const (
@@ -122,10 +121,10 @@ func IsManifestInAppliedState(mw *ocmworkv1.ManifestWork) bool {
 func (mwu *MWUtil) CreateOrUpdateVRGManifestWork(
 	name, namespace, homeCluster string,
 	vrg rmn.VolumeReplicationGroup, annotations map[string]string,
-) (ctrlutil.OperationResult, error) {
+) error {
 	manifestWork, err := mwu.generateVRGManifestWork(name, namespace, homeCluster, vrg, annotations)
 	if err != nil {
-		return ctrlutil.OperationResultNone, err
+		return err
 	}
 
 	return mwu.createOrUpdateManifestWork(manifestWork, homeCluster)
@@ -164,9 +163,7 @@ func (mwu *MWUtil) CreateOrUpdateMModeManifestWork(
 		return err
 	}
 
-	_, err = mwu.createOrUpdateManifestWork(manifestWork, cluster)
-
-	return err
+	return mwu.createOrUpdateManifestWork(manifestWork, cluster)
 }
 
 func (mwu *MWUtil) generateMModeManifestWork(name, cluster string,
@@ -245,9 +242,7 @@ func (mwu *MWUtil) CreateOrUpdateNFManifestWork(
 		return err
 	}
 
-	_, err = mwu.createOrUpdateManifestWork(manifestWork, homeCluster)
-
-	return err
+	return mwu.createOrUpdateManifestWork(manifestWork, homeCluster)
 }
 
 func (mwu *MWUtil) generateNFManifestWork(name, homeCluster string,
@@ -285,9 +280,7 @@ func (mwu *MWUtil) CreateOrUpdateDRCConfigManifestWork(cluster string, cConfig r
 		return err
 	}
 
-	_, err = mwu.createOrUpdateManifestWork(manifestWork, cluster)
-
-	return err
+	return mwu.createOrUpdateManifestWork(manifestWork, cluster)
 }
 
 func (mwu *MWUtil) generateDRCConfigManifestWork(
@@ -365,9 +358,7 @@ func (mwu *MWUtil) CreateOrUpdateNamespaceManifest(
 		PropagationPolicy: ocmworkv1.DeletePropagationPolicyTypeOrphan,
 	}
 
-	_, err = mwu.createOrUpdateManifestWork(manifestWork, managedClusterNamespace)
-
-	return err
+	return mwu.createOrUpdateManifestWork(manifestWork, managedClusterNamespace)
 }
 
 func Namespace(name string) *corev1.Namespace {
@@ -462,7 +453,7 @@ func (mwu *MWUtil) CreateOrUpdateDrClusterManifestWork(
 		manifests[i] = *manifest
 	}
 
-	_, err := mwu.createOrUpdateManifestWork(
+	return mwu.createOrUpdateManifestWork(
 		mwu.newManifestWork(
 			DrClusterManifestWorkName,
 			clusterName,
@@ -471,8 +462,6 @@ func (mwu *MWUtil) CreateOrUpdateDrClusterManifestWork(
 		),
 		clusterName,
 	)
-
-	return err
 }
 
 var (
@@ -602,29 +591,25 @@ func (mwu *MWUtil) newManifestWork(name string, mcNamespace string,
 func (mwu *MWUtil) createOrUpdateManifestWork(
 	mw *ocmworkv1.ManifestWork,
 	managedClusternamespace string,
-) (ctrlutil.OperationResult, error) {
+) error {
 	key := types.NamespacedName{Name: mw.Name, Namespace: managedClusternamespace}
 	foundMW := &ocmworkv1.ManifestWork{}
 
 	err := mwu.Client.Get(mwu.Ctx, key, foundMW)
 	if err != nil {
 		if !errors.IsNotFound(err) {
-			return ctrlutil.OperationResultNone, errorswrapper.Wrap(err, fmt.Sprintf("failed to fetch ManifestWork %s", key))
+			return errorswrapper.Wrap(err, fmt.Sprintf("failed to fetch ManifestWork %s", key))
 		}
 
 		mwu.Log.Info("Creating ManifestWork", "cluster", managedClusternamespace, "MW", mw)
 
-		if err := mwu.Create(mwu.Ctx, mw); err != nil {
-			return ctrlutil.OperationResultNone, err
-		}
-
-		return ctrlutil.OperationResultCreated, nil
+		return mwu.Client.Create(mwu.Ctx, mw)
 	}
 
 	if !reflect.DeepEqual(foundMW.Spec, mw.Spec) {
 		mwu.Log.Info("Updating ManifestWork", "name", mw.Name, "namespace", foundMW.Namespace)
 
-		err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 			if err := mwu.Client.Get(mwu.Ctx, key, foundMW); err != nil {
 				return err
 			}
@@ -633,13 +618,9 @@ func (mwu *MWUtil) createOrUpdateManifestWork(
 
 			return mwu.Client.Update(mwu.Ctx, foundMW)
 		})
-
-		if err == nil {
-			return ctrlutil.OperationResultUpdated, nil
-		}
 	}
 
-	return ctrlutil.OperationResultNone, nil
+	return nil
 }
 
 func (mwu *MWUtil) DeleteNamespaceManifestWork(clusterName string, annotations map[string]string) error {
