@@ -70,7 +70,6 @@ func DeleteReplicationGroupSource(
 	}
 
 	err := k8sClient.Delete(ctx, rgs)
-
 	if errors.IsNotFound(err) {
 		return nil
 	}
@@ -90,7 +89,6 @@ func DeleteReplicationGroupDestination(
 	}
 
 	err := k8sClient.Delete(ctx, rgd)
-
 	if errors.IsNotFound(err) {
 		return nil
 	}
