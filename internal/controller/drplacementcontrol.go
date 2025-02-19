@@ -2215,7 +2215,7 @@ func updateDRPCProgression(
 		// caller of this function is always d.setProgression()
 		// caller of d.setProgression() makes the progression decision.
 		// Use ancestorLevel=2 to get the caller of the caller.
-		// nolint: mnd
+		// nolint: gomnd
 		decisionFunction := getCallerFunction(2)
 
 		log.Info(fmt.Sprintf("function %v changing Progression from '%s' to '%s'",
