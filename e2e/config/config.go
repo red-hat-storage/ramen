@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: The RamenDR authors
 // SPDX-License-Identifier: Apache-2.0
 
-package util
+package config
 
 import (
 	"fmt"
@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
-	"go.uber.org/zap"
 )
 
 const (
@@ -23,15 +22,17 @@ type PVCSpec struct {
 	AccessModes          string
 	UnsupportedDeployers []string
 }
-type ClusterConfig struct {
+
+type Cluster struct {
 	Name           string
 	KubeconfigPath string
 }
-type TestConfig struct {
+
+type Config struct {
 	// User configurable values.
 	ChannelNamespace string
 	GitURL           string
-	Clusters         map[string]ClusterConfig
+	Clusters         map[string]Cluster
 	PVCSpecs         []PVCSpec
 
 	// Generated values
@@ -40,27 +41,13 @@ type TestConfig struct {
 
 var (
 	resourceNameForbiddenCharacters *regexp.Regexp
-	config                          = &TestConfig{}
+	config                          = &Config{}
 )
 
 //nolint:cyclop
-func ReadConfig(log *zap.SugaredLogger, configFile string) error {
+func ReadConfig(configFile string) error {
 	viper.SetDefault("ChannelNamespace", defaultChannelNamespace)
 	viper.SetDefault("GitURL", defaultGitURL)
-
-	if err := viper.BindEnv("ChannelNamespace", "ChannelNamespace"); err != nil {
-		return (err)
-	}
-
-	if err := viper.BindEnv("GitURL", "GitURL"); err != nil {
-		return (err)
-	}
-
-	if configFile == "" {
-		log.Info("No configuration file specified, using default value config.yaml")
-
-		configFile = "config.yaml"
-	}
 
 	viper.SetConfigFile(configFile)
 
@@ -107,6 +94,10 @@ func GetGitURL() string {
 
 func GetPVCSpecs() []PVCSpec {
 	return config.PVCSpecs
+}
+
+func GetClusters() map[string]Cluster {
+	return config.Clusters
 }
 
 // resourceName convert a URL to conventional k8s resource name:
