@@ -109,3 +109,6 @@ require (
 
 // replace directives to accommodate for stolostron
 replace k8s.io/client-go v12.0.0+incompatible => k8s.io/client-go v0.31.0
+
+// For CVE-2025-22868
+replace golang.org/x/oauth2 v0.23.0 => github.com/openshift/golang-oauth2 v0.26.1-0.20250310184649-06a918c6239d
