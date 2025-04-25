@@ -13,12 +13,16 @@ import (
 	"github.com/ramendr/ramen/e2e/util"
 )
 
-func waitSubscriptionPhase(ctx types.Context, namespace, name string, phase subscriptionv1.SubscriptionPhase) error {
+func waitSubscriptionPhase(
+	ctx types.TestContext,
+	namespace, name string,
+	phase subscriptionv1.SubscriptionPhase,
+) error {
 	log := ctx.Logger()
 	startTime := time.Now()
 
 	for {
-		sub, err := getSubscription(ctx.Env().Hub, namespace, name)
+		sub, err := getSubscription(ctx, namespace, name)
 		if err != nil {
 			return err
 		}
@@ -35,11 +39,13 @@ func waitSubscriptionPhase(ctx types.Context, namespace, name string, phase subs
 				name, phase, ctx.Env().Hub.Name)
 		}
 
-		time.Sleep(util.RetryInterval)
+		if err := util.Sleep(ctx.Context(), util.RetryInterval); err != nil {
+			return err
+		}
 	}
 }
 
-func WaitWorkloadHealth(ctx types.Context, cluster types.Cluster, namespace string) error {
+func WaitWorkloadHealth(ctx types.TestContext, cluster types.Cluster, namespace string) error {
 	log := ctx.Logger()
 	w := ctx.Workload()
 	startTime := time.Now()
@@ -57,6 +63,8 @@ func WaitWorkloadHealth(ctx types.Context, cluster types.Cluster, namespace stri
 				w.GetName(), util.Timeout, cluster.Name)
 		}
 
-		time.Sleep(util.RetryInterval)
+		if err := util.Sleep(ctx.Context(), util.RetryInterval); err != nil {
+			return err
+		}
 	}
 }

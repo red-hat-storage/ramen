@@ -17,13 +17,13 @@ func (s Subscription) GetName() string {
 	return "subscr"
 }
 
-func (s Subscription) GetNamespace(_ types.Context) string {
+func (s Subscription) GetNamespace(_ types.TestContext) string {
 	// No special namespaces.
 	return ""
 }
 
 // Deploy creates a Subscription on the hub cluster, creating the workload on one of the managed clusters.
-func (s Subscription) Deploy(ctx types.Context) error {
+func (s Subscription) Deploy(ctx types.TestContext) error {
 	// Generate a Placement for the Workload
 	// Use the global Channel
 	// Generate a Binding for the namespace (does this need clusters?)
@@ -42,7 +42,7 @@ func (s Subscription) Deploy(ctx types.Context) error {
 		ctx.AppNamespace(), ctx.Workload().GetAppName(), cluster.Name)
 
 	// create subscription namespace
-	err := util.CreateNamespace(ctx.Env().Hub, managementNamespace, log)
+	err := util.CreateNamespace(ctx, ctx.Env().Hub, managementNamespace)
 	if err != nil {
 		return err
 	}
@@ -73,13 +73,13 @@ func (s Subscription) Deploy(ctx types.Context) error {
 }
 
 // Undeploy deletes a subscription from the hub cluster, deleting the workload from the managed clusters.
-func (s Subscription) Undeploy(ctx types.Context) error {
+func (s Subscription) Undeploy(ctx types.TestContext) error {
 	name := ctx.Name()
 	log := ctx.Logger()
 	config := ctx.Config()
 	managementNamespace := ctx.ManagementNamespace()
 
-	clusterName, err := util.GetCurrentCluster(ctx.Env().Hub, managementNamespace, name)
+	clusterName, err := util.GetCurrentCluster(ctx, managementNamespace, name)
 	if err != nil {
 		if !k8serrors.IsNotFound(err) {
 			return err
@@ -107,7 +107,7 @@ func (s Subscription) Undeploy(ctx types.Context) error {
 		return err
 	}
 
-	err = util.DeleteNamespace(ctx.Env().Hub, managementNamespace, log)
+	err = util.DeleteNamespace(ctx, ctx.Env().Hub, managementNamespace)
 	if err != nil {
 		return err
 	}

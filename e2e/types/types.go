@@ -4,6 +4,8 @@
 package types
 
 import (
+	"context"
+
 	"go.uber.org/zap"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -76,11 +78,11 @@ type Env struct {
 
 // Deployer interface has methods to deploy a workload to a cluster
 type Deployer interface {
-	Deploy(Context) error
-	Undeploy(Context) error
+	Deploy(TestContext) error
+	Undeploy(TestContext) error
 	GetName() string
 	// GetNamespace return the namespace for the ramen resources, or empty string if not using a special namespace.
-	GetNamespace(Context) string
+	GetNamespace(TestContext) string
 	// Return true for OCM discovered application, false for OCM managed applications.
 	IsDiscovered() bool
 }
@@ -93,13 +95,21 @@ type Workload interface {
 	GetAppName() string
 	GetPath() string
 	GetBranch() string
-
-	Health(ctx Context, cluster Cluster, namespace string) error
+	Health(ctx TestContext, cluster Cluster, namespace string) error
 }
 
-// Context combines workload, deployer and logger used in the content of one test.
-// The context name is used for logging and resource names.
+// Context keeps the Logger, Env, Config, and Context shared by all code in the e2e package.
 type Context interface {
+	Logger() *zap.SugaredLogger
+	Env() *Env
+	Config() *Config
+	Context() context.Context
+}
+
+// TestContext is a more specific Context for a single test; a combination of Deployer, Workload, and namespaces. A test
+// has a unique Name and Logger, and it shares the global Env, Config and Context.
+type TestContext interface {
+	Context
 	Deployer() Deployer
 	Workload() Workload
 	Name() string
@@ -110,8 +120,4 @@ type Context interface {
 
 	// Namespace for application resources on the managed clusters.
 	AppNamespace() string
-
-	Logger() *zap.SugaredLogger
-	Env() *Env
-	Config() *Config
 }

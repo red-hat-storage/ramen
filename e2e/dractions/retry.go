@@ -16,7 +16,7 @@ import (
 	"github.com/ramendr/ramen/e2e/util"
 )
 
-func waitDRPCReady(ctx types.Context, namespace string, drpcName string) error {
+func waitDRPCReady(ctx types.TestContext, namespace string, drpcName string) error {
 	log := ctx.Logger()
 	hub := ctx.Env().Hub
 	startTime := time.Now()
@@ -24,7 +24,7 @@ func waitDRPCReady(ctx types.Context, namespace string, drpcName string) error {
 	log.Debugf("Waiting until drpc \"%s/%s\" is ready in cluster %q", namespace, drpcName, hub.Name)
 
 	for {
-		drpc, err := getDRPC(hub, namespace, drpcName)
+		drpc, err := getDRPC(ctx, namespace, drpcName)
 		if err != nil {
 			return err
 		}
@@ -52,7 +52,9 @@ func waitDRPCReady(ctx types.Context, namespace string, drpcName string) error {
 				hub.Name, available, peerReady, progressionCompleted, drpc.Status.LastGroupSyncTime)
 		}
 
-		time.Sleep(util.RetryInterval)
+		if err := util.Sleep(ctx.Context(), util.RetryInterval); err != nil {
+			return err
+		}
 	}
 }
 
@@ -62,7 +64,7 @@ func conditionMet(conditions []metav1.Condition, conditionType string) bool {
 	return condition != nil && condition.Status == "True"
 }
 
-func waitDRPCPhase(ctx types.Context, namespace, name string, phase ramen.DRState) error {
+func waitDRPCPhase(ctx types.TestContext, namespace, name string, phase ramen.DRState) error {
 	log := ctx.Logger()
 	hub := ctx.Env().Hub
 	startTime := time.Now()
@@ -70,7 +72,7 @@ func waitDRPCPhase(ctx types.Context, namespace, name string, phase ramen.DRStat
 	log.Debugf("Waiting until drpc \"%s/%s\" reach phase %q in cluster %q", namespace, name, phase, hub.Name)
 
 	for {
-		drpc, err := getDRPC(hub, namespace, name)
+		drpc, err := getDRPC(ctx, namespace, name)
 		if err != nil {
 			return err
 		}
@@ -86,12 +88,18 @@ func waitDRPCPhase(ctx types.Context, namespace, name string, phase ramen.DRStat
 			return fmt.Errorf("drpc %q status is not %q yet before timeout in cluster %q, fail", name, phase, hub.Name)
 		}
 
-		time.Sleep(util.RetryInterval)
+		if err := util.Sleep(ctx.Context(), util.RetryInterval); err != nil {
+			return err
+		}
 	}
 }
 
-func getTargetCluster(cluster types.Cluster, drPolicyName, currentCluster string) (string, error) {
-	drpolicy, err := util.GetDRPolicy(cluster, drPolicyName)
+func getTargetCluster(
+	ctx types.TestContext,
+	cluster types.Cluster,
+	drPolicyName, currentCluster string,
+) (string, error) {
+	drpolicy, err := util.GetDRPolicy(ctx, cluster, drPolicyName)
 	if err != nil {
 		return "", err
 	}
@@ -106,7 +114,7 @@ func getTargetCluster(cluster types.Cluster, drPolicyName, currentCluster string
 	return targetCluster, nil
 }
 
-func waitDRPCDeleted(ctx types.Context, namespace string, name string) error {
+func waitDRPCDeleted(ctx types.TestContext, namespace string, name string) error {
 	log := ctx.Logger()
 	hub := ctx.Env().Hub
 	startTime := time.Now()
@@ -114,7 +122,7 @@ func waitDRPCDeleted(ctx types.Context, namespace string, name string) error {
 	log.Debugf("Waiting until drpc \"%s/%s\" is deleted in cluster %q", namespace, name, hub.Name)
 
 	for {
-		_, err := getDRPC(hub, namespace, name)
+		_, err := getDRPC(ctx, namespace, name)
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
 				log.Debugf("drpc \"%s/%s\" is deleted in cluster %q", namespace, name, hub.Name)
@@ -129,13 +137,15 @@ func waitDRPCDeleted(ctx types.Context, namespace string, name string) error {
 			return fmt.Errorf("drpc %q is not deleted yet before timeout in cluster %q, fail", name, hub.Name)
 		}
 
-		time.Sleep(util.RetryInterval)
+		if err := util.Sleep(ctx.Context(), util.RetryInterval); err != nil {
+			return err
+		}
 	}
 }
 
 // nolint:unparam
 func waitDRPCProgression(
-	ctx types.Context,
+	ctx types.TestContext,
 	namespace, name string,
 	progression ramen.ProgressionStatus,
 ) error {
@@ -147,7 +157,7 @@ func waitDRPCProgression(
 		namespace, name, progression, hub.Name)
 
 	for {
-		drpc, err := getDRPC(hub, namespace, name)
+		drpc, err := getDRPC(ctx, namespace, name)
 		if err != nil {
 			return err
 		}
@@ -164,6 +174,8 @@ func waitDRPCProgression(
 				name, progression, util.Timeout, hub.Name)
 		}
 
-		time.Sleep(util.RetryInterval)
+		if err := util.Sleep(ctx.Context(), util.RetryInterval); err != nil {
+			return err
+		}
 	}
 }

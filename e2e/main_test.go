@@ -4,6 +4,7 @@
 package e2e_test
 
 import (
+	"context"
 	"flag"
 	"os"
 	"testing"
@@ -19,13 +20,30 @@ import (
 	"github.com/ramendr/ramen/e2e/workloads"
 )
 
+// Context implements types.Context for sharing the log, env, and config with all code.
 type Context struct {
 	log    *zap.SugaredLogger
 	env    *types.Env
 	config *types.Config
 }
 
-// The global test context
+func (c *Context) Logger() *zap.SugaredLogger {
+	return c.log
+}
+
+func (c *Context) Config() *types.Config {
+	return c.config
+}
+
+func (c *Context) Env() *types.Env {
+	return c.env
+}
+
+func (c *Context) Context() context.Context {
+	return context.Background()
+}
+
+// The global test context.
 var Ctx Context
 
 func TestMain(m *testing.M) {
@@ -60,7 +78,7 @@ func TestMain(m *testing.M) {
 		log.Fatalf("Failed to read config: %s", err)
 	}
 
-	Ctx.env, err = env.New(Ctx.config, Ctx.log)
+	Ctx.env, err = env.New(Ctx.Context(), Ctx.config, Ctx.log)
 	if err != nil {
 		log.Fatalf("Failed to create testing context: %s", err)
 	}

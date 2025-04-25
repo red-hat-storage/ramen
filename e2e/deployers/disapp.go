@@ -18,12 +18,12 @@ func (d DiscoveredApp) GetName() string {
 	return "disapp"
 }
 
-func (d DiscoveredApp) GetNamespace(ctx types.Context) string {
+func (d DiscoveredApp) GetNamespace(ctx types.TestContext) string {
 	return ctx.Config().Namespaces.RamenOpsNamespace
 }
 
 // Deploy creates a workload on the first managed cluster.
-func (d DiscoveredApp) Deploy(ctx types.Context) error {
+func (d DiscoveredApp) Deploy(ctx types.TestContext) error {
 	log := ctx.Logger()
 	appNamespace := ctx.AppNamespace()
 
@@ -31,7 +31,7 @@ func (d DiscoveredApp) Deploy(ctx types.Context) error {
 	cluster := ctx.Env().C1
 
 	// Create namespace on the first DR cluster (c1)
-	err := util.CreateNamespace(cluster, appNamespace, log)
+	err := util.CreateNamespace(ctx, cluster, appNamespace)
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func (d DiscoveredApp) Deploy(ctx types.Context) error {
 }
 
 // Undeploy deletes the workload from the managed clusters.
-func (d DiscoveredApp) Undeploy(ctx types.Context) error {
+func (d DiscoveredApp) Undeploy(ctx types.TestContext) error {
 	log := ctx.Logger()
 	appNamespace := ctx.AppNamespace()
 
@@ -89,11 +89,11 @@ func (d DiscoveredApp) Undeploy(ctx types.Context) error {
 	}
 
 	// delete namespace on both clusters
-	if err := util.DeleteNamespace(ctx.Env().C1, appNamespace, log); err != nil {
+	if err := util.DeleteNamespace(ctx, ctx.Env().C1, appNamespace); err != nil {
 		return err
 	}
 
-	if err := util.DeleteNamespace(ctx.Env().C2, appNamespace, log); err != nil {
+	if err := util.DeleteNamespace(ctx, ctx.Env().C2, appNamespace); err != nil {
 		return err
 	}
 

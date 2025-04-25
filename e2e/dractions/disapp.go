@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
-	"go.uber.org/zap"
 
 	"github.com/ramendr/ramen/e2e/config"
 	"github.com/ramendr/ramen/e2e/deployers"
@@ -17,7 +16,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
-func EnableProtectionDiscoveredApps(ctx types.Context) error {
+func EnableProtectionDiscoveredApps(ctx types.TestContext) error {
 	w := ctx.Workload()
 	name := ctx.Name()
 	log := ctx.Logger()
@@ -53,7 +52,7 @@ func EnableProtectionDiscoveredApps(ctx types.Context) error {
 		return err
 	}
 
-	if err := createNamespacesDiscoveredApps(ctx, appNamespace, log); err != nil {
+	if err := createNamespacesDiscoveredApps(ctx, appNamespace); err != nil {
 		return err
 	}
 
@@ -70,7 +69,7 @@ func EnableProtectionDiscoveredApps(ctx types.Context) error {
 
 // remove DRPC
 // update placement annotation
-func DisableProtectionDiscoveredApps(ctx types.Context) error {
+func DisableProtectionDiscoveredApps(ctx types.TestContext) error {
 	name := ctx.Name()
 	log := ctx.Logger()
 	config := ctx.Config()
@@ -80,7 +79,7 @@ func DisableProtectionDiscoveredApps(ctx types.Context) error {
 	placementName := name
 	drpcName := name
 
-	clusterName, err := util.GetCurrentCluster(ctx.Env().Hub, managementNamespace, placementName)
+	clusterName, err := util.GetCurrentCluster(ctx, managementNamespace, placementName)
 	if err != nil {
 		if !k8serrors.IsNotFound(err) {
 			return err
@@ -118,7 +117,7 @@ func DisableProtectionDiscoveredApps(ctx types.Context) error {
 
 // nolint:funlen,cyclop
 func failoverRelocateDiscoveredApps(
-	ctx types.Context,
+	ctx types.TestContext,
 	action ramen.DRAction,
 	state ramen.DRState,
 	currentClusterName string,
@@ -170,12 +169,12 @@ func failoverRelocateDiscoveredApps(
 // For Kubernetes, creates namespaces and adds annotation on both DR clusters for volsync based replication.
 // For OpenShift, creates namespace only on the target DR cluster (c2) before failover.
 // Returns an error if the distribution is unknown, and if namespace creation or annotation fails.
-func createNamespacesDiscoveredApps(ctx types.Context, namespace string, log *zap.SugaredLogger) error {
+func createNamespacesDiscoveredApps(ctx types.TestContext, namespace string) error {
 	switch ctx.Config().Distro {
 	case config.DistroK8s:
-		return util.CreateNamespaceAndAddAnnotation(ctx.Env(), namespace, log)
+		return util.CreateNamespaceAndAddAnnotation(ctx, namespace)
 	case config.DistroOcp:
-		return util.CreateNamespace(ctx.Env().C2, namespace, log)
+		return util.CreateNamespace(ctx, ctx.Env().C2, namespace)
 	default:
 		return fmt.Errorf("unknown distro: %s", ctx.Config().Distro)
 	}

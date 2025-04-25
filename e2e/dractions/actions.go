@@ -5,7 +5,6 @@ package dractions
 
 import (
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
-	"go.uber.org/zap"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/util/retry"
 
@@ -25,7 +24,7 @@ const (
 // Determine KubeObjectProtection requirements if Imperative (?)
 // Create DRPC, in desired namespace
 // nolint:funlen
-func EnableProtection(ctx types.Context) error {
+func EnableProtection(ctx types.TestContext) error {
 	d := ctx.Deployer()
 	if d.IsDiscovered() {
 		return EnableProtectionDiscoveredApps(ctx)
@@ -43,7 +42,7 @@ func EnableProtection(ctx types.Context) error {
 	placementName := name
 	drpcName := name
 
-	clusterName, err := util.GetCurrentCluster(ctx.Env().Hub, managementNamespace, placementName)
+	clusterName, err := util.GetCurrentCluster(ctx, managementNamespace, placementName)
 	if err != nil {
 		return err
 	}
@@ -51,7 +50,7 @@ func EnableProtection(ctx types.Context) error {
 	log.Infof("Protecting workload \"%s/%s\" in cluster %q", appNamespace, appname, clusterName)
 
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		placement, err := util.GetPlacement(ctx.Env().Hub, managementNamespace, placementName)
+		placement, err := util.GetPlacement(ctx, managementNamespace, placementName)
 		if err != nil {
 			return err
 		}
@@ -62,7 +61,7 @@ func EnableProtection(ctx types.Context) error {
 
 		placement.Annotations[OcmSchedulingDisable] = "true"
 
-		if err := updatePlacement(ctx.Env().Hub, placement); err != nil {
+		if err := updatePlacement(ctx, placement); err != nil {
 			return err
 		}
 
@@ -81,7 +80,7 @@ func EnableProtection(ctx types.Context) error {
 		return err
 	}
 
-	if err := createNamespaces(ctx, appNamespace, log); err != nil {
+	if err := createNamespaces(ctx, appNamespace); err != nil {
 		return err
 	}
 
@@ -97,7 +96,7 @@ func EnableProtection(ctx types.Context) error {
 
 // remove DRPC
 // update placement annotation
-func DisableProtection(ctx types.Context) error {
+func DisableProtection(ctx types.TestContext) error {
 	d := ctx.Deployer()
 	if d.IsDiscovered() {
 		return DisableProtectionDiscoveredApps(ctx)
@@ -109,7 +108,7 @@ func DisableProtection(ctx types.Context) error {
 	placementName := name
 	log := ctx.Logger()
 
-	clusterName, err := util.GetCurrentCluster(ctx.Env().Hub, managementNamespace, placementName)
+	clusterName, err := util.GetCurrentCluster(ctx, managementNamespace, placementName)
 	if err != nil {
 		if !k8serrors.IsNotFound(err) {
 			return err
@@ -138,18 +137,18 @@ func DisableProtection(ctx types.Context) error {
 	return nil
 }
 
-func Failover(ctx types.Context) error {
+func Failover(ctx types.TestContext) error {
 	managementNamespace := ctx.ManagementNamespace()
 	log := ctx.Logger()
 	name := ctx.Name()
 	config := ctx.Config()
 
-	currentCluster, err := util.GetCurrentCluster(ctx.Env().Hub, managementNamespace, name)
+	currentCluster, err := util.GetCurrentCluster(ctx, managementNamespace, name)
 	if err != nil {
 		return err
 	}
 
-	targetCluster, err := getTargetCluster(ctx.Env().Hub, config.DRPolicy, currentCluster)
+	targetCluster, err := getTargetCluster(ctx, ctx.Env().Hub, config.DRPolicy, currentCluster)
 	if err != nil {
 		return err
 	}
@@ -171,18 +170,18 @@ func Failover(ctx types.Context) error {
 // Check Placement
 // Relocate to Primary in DRPolicy as the PrimaryCluster
 // Update DRPC
-func Relocate(ctx types.Context) error {
+func Relocate(ctx types.TestContext) error {
 	managementNamespace := ctx.ManagementNamespace()
 	log := ctx.Logger()
 	config := ctx.Config()
 	name := ctx.Name()
 
-	currentCluster, err := util.GetCurrentCluster(ctx.Env().Hub, managementNamespace, name)
+	currentCluster, err := util.GetCurrentCluster(ctx, managementNamespace, name)
 	if err != nil {
 		return err
 	}
 
-	targetCluster, err := getTargetCluster(ctx.Env().Hub, config.DRPolicy, currentCluster)
+	targetCluster, err := getTargetCluster(ctx, ctx.Env().Hub, config.DRPolicy, currentCluster)
 	if err != nil {
 		return err
 	}
@@ -200,7 +199,8 @@ func Relocate(ctx types.Context) error {
 	return nil
 }
 
-func failoverRelocate(ctx types.Context,
+func failoverRelocate(
+	ctx types.TestContext,
 	action ramen.DRAction,
 	state ramen.DRState,
 	currentCluster string,
@@ -226,13 +226,12 @@ func failoverRelocate(ctx types.Context,
 }
 
 func waitAndUpdateDRPC(
-	ctx types.Context,
+	ctx types.TestContext,
 	namespace, drpcName string,
 	action ramen.DRAction,
 	targetCluster string,
 ) error {
 	log := ctx.Logger()
-	hub := ctx.Env().Hub
 
 	// here we expect drpc should be ready before action
 	if err := waitDRPCReady(ctx, namespace, drpcName); err != nil {
@@ -240,7 +239,7 @@ func waitAndUpdateDRPC(
 	}
 
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		drpc, err := getDRPC(hub, namespace, drpcName)
+		drpc, err := getDRPC(ctx, namespace, drpcName)
 		if err != nil {
 			return err
 		}
@@ -252,7 +251,7 @@ func waitAndUpdateDRPC(
 			drpc.Spec.PreferredCluster = targetCluster
 		}
 
-		if err := updateDRPC(hub, drpc); err != nil {
+		if err := updateDRPC(ctx, drpc); err != nil {
 			return err
 		}
 
@@ -266,9 +265,9 @@ func waitAndUpdateDRPC(
 // createNamespaces creates namespaces and annotations for managed app protection on
 // both DR clusters for Volsync based replication if the distribution is Kubernetes.
 // Returns an error if namespace creation or annotation fails.
-func createNamespaces(ctx types.Context, appNamespace string, log *zap.SugaredLogger) error {
+func createNamespaces(ctx types.TestContext, appNamespace string) error {
 	if ctx.Config().Distro == config.DistroK8s {
-		return util.CreateNamespaceAndAddAnnotation(ctx.Env(), appNamespace, log)
+		return util.CreateNamespaceAndAddAnnotation(ctx, appNamespace)
 	}
 
 	return nil
