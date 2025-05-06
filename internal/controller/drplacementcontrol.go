@@ -341,7 +341,8 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 	const done = true
 
 	if d.instance.Spec.FailoverCluster == "" {
-		msg := "missing value for spec.FailoverCluster"
+		const msg = "missing value for spec.FailoverCluster"
+
 		addOrUpdateCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
 			d.getConditionStatusForTypeAvailable(), string(d.instance.Status.Phase), msg)
 
@@ -2311,7 +2312,7 @@ func updateDRPCProgression(
 		// caller of this function is always d.setProgression()
 		// caller of d.setProgression() makes the progression decision.
 		// Use ancestorLevel=2 to get the caller of the caller.
-		// nolint: gomnd
+		// nolint: mnd
 		decisionFunction := getCallerFunction(2)
 
 		log.Info(fmt.Sprintf("function %v changing Progression from '%s' to '%s'",
