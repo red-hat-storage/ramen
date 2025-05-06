@@ -1703,7 +1703,7 @@ func isVRConditionMet(volRep *volrep.VolumeReplication,
 ) (bool, conditionState, string) {
 	met := true
 
-	volRepCondition := findCondition(volRep.Status.Conditions, conditionType)
+	volRepCondition := rmnutil.FindCondition(volRep.Status.Conditions, conditionType)
 	if volRepCondition == nil {
 		errorMsg := fmt.Sprintf("Failed to get the %s condition from status of VolumeReplication resource.",
 			conditionType)
@@ -2494,7 +2494,7 @@ func (v *VRGInstance) aggregateVolRepDataReadyCondition() *metav1.Condition {
 			continue
 		}
 
-		condition := findCondition(protectedPVC.Conditions, VRGConditionTypeDataReady)
+		condition := rmnutil.FindCondition(protectedPVC.Conditions, VRGConditionTypeDataReady)
 
 		v.log.Info("Condition for DataReady", "cond", condition, "protectedPVC", protectedPVC)
 
@@ -2582,7 +2582,7 @@ func (v *VRGInstance) aggregateVolRepDataProtectedCondition() *metav1.Condition 
 			continue
 		}
 
-		condition := findCondition(protectedPVC.Conditions, VRGConditionTypeDataProtected)
+		condition := rmnutil.FindCondition(protectedPVC.Conditions, VRGConditionTypeDataProtected)
 
 		if condition == nil {
 			vrgProtected = false
@@ -2669,7 +2669,7 @@ func (v *VRGInstance) aggregateVolRepClusterDataProtectedCondition() *metav1.Con
 			continue
 		}
 
-		condition := findCondition(protectedPVC.Conditions, VRGConditionTypeClusterDataProtected)
+		condition := rmnutil.FindCondition(protectedPVC.Conditions, VRGConditionTypeClusterDataProtected)
 		if condition == nil ||
 			condition.Reason == VRGConditionReasonUploading {
 			atleastOneProtecting = true

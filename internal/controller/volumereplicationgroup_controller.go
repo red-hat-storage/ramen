@@ -1218,6 +1218,7 @@ func (v *VRGInstance) processAsPrimary() ctrl.Result {
 	return v.updateVRGConditionsAndStatus(v.result)
 }
 
+// nolint: dupl
 func (v *VRGInstance) shouldRestoreClusterData() bool {
 	if v.instance.Spec.PrepareForFinalSync || v.instance.Spec.RunFinalSync {
 		setVRGClusterDataReadyCondition(
@@ -1229,7 +1230,7 @@ func (v *VRGInstance) shouldRestoreClusterData() bool {
 		return false
 	}
 
-	clusterDataReady := findCondition(v.instance.Status.Conditions, VRGConditionTypeClusterDataReady)
+	clusterDataReady := util.FindCondition(v.instance.Status.Conditions, VRGConditionTypeClusterDataReady)
 	if clusterDataReady == nil {
 		return true
 	}
@@ -1264,6 +1265,7 @@ func (v *VRGInstance) shouldRestoreClusterData() bool {
 	return true
 }
 
+// nolint: dupl
 func (v *VRGInstance) shouldRestoreKubeObjects() bool {
 	if v.instance.Spec.PrepareForFinalSync || v.instance.Spec.RunFinalSync {
 		setVRGKubeObjectsReadyCondition(
@@ -1275,7 +1277,7 @@ func (v *VRGInstance) shouldRestoreKubeObjects() bool {
 		return false
 	}
 
-	KubeObjectsRestored := findCondition(v.instance.Status.Conditions, VRGConditionTypeKubeObjectsReady)
+	KubeObjectsRestored := util.FindCondition(v.instance.Status.Conditions, VRGConditionTypeKubeObjectsReady)
 	if KubeObjectsRestored == nil {
 		return true
 	}
@@ -1446,8 +1448,8 @@ func (v *VRGInstance) reconcileAsSecondary() ctrl.Result {
 // resetInitialStatusAsSecondary resets required initial conditions to start processing VRG as Secondary, if these are
 // updated, VRG needs to be requeued for a reconcile to ensure the updates are preserved before further processing.
 func (v *VRGInstance) resetInitialStatusAsSecondary() bool {
-	clusterDataReady := findCondition(v.instance.Status.Conditions, VRGConditionTypeClusterDataReady)
-	kubeObjectsReady := findCondition(v.instance.Status.Conditions, VRGConditionTypeKubeObjectsReady)
+	clusterDataReady := util.FindCondition(v.instance.Status.Conditions, VRGConditionTypeClusterDataReady)
+	kubeObjectsReady := util.FindCondition(v.instance.Status.Conditions, VRGConditionTypeKubeObjectsReady)
 
 	update := false
 	if clusterDataReady == nil || clusterDataReady.Reason != VRGConditionReasonClusterDataUnused {
@@ -1532,7 +1534,7 @@ func (v *VRGInstance) updateVRGStatus(result ctrl.Result) ctrl.Result {
 			return result
 		}
 
-		dataReadyCondition := findCondition(v.instance.Status.Conditions, VRGConditionTypeDataReady)
+		dataReadyCondition := util.FindCondition(v.instance.Status.Conditions, VRGConditionTypeDataReady)
 		v.log.Info(fmt.Sprintf("Updated VRG Status VolRep pvccount (%d), VolSync pvccount(%d)"+
 			" DataReady Condition (%s)",
 			len(v.volRepPVCs), len(v.volSyncPVCs), dataReadyCondition))
@@ -1562,7 +1564,7 @@ func (v *VRGInstance) updateVRGStatus(result ctrl.Result) ctrl.Result {
 // status.State as Primary is a final state, when VRG is rolled out initially before the workload is placed
 // on the cluster
 func (v *VRGInstance) updateStatusState() {
-	dataReadyCondition := findCondition(v.instance.Status.Conditions, VRGConditionTypeDataReady)
+	dataReadyCondition := util.FindCondition(v.instance.Status.Conditions, VRGConditionTypeDataReady)
 	if dataReadyCondition.Status != metav1.ConditionTrue ||
 		dataReadyCondition.ObservedGeneration != v.instance.Generation {
 		v.instance.Status.State = ramendrv1alpha1.UnknownState
@@ -1589,7 +1591,7 @@ func (v *VRGInstance) updateStatusStateForSecondary() {
 		return
 	}
 
-	dataProtectedCondition := findCondition(v.instance.Status.Conditions, VRGConditionTypeDataProtected)
+	dataProtectedCondition := util.FindCondition(v.instance.Status.Conditions, VRGConditionTypeDataProtected)
 	if dataProtectedCondition == nil {
 		if len(v.volRepPVCs) == 0 {
 			// VRG is exclusively using volsync
@@ -1634,7 +1636,7 @@ func (v *VRGInstance) updateVRGConditions() {
 	logAndSet := func(conditionName string, subconditions ...*metav1.Condition) {
 		msg := fmt.Sprintf("merging %s condition", conditionName)
 		v.log.Info(msg, "subconditions", subconditions)
-		finalCondition := util.MergeConditions(setStatusCondition,
+		finalCondition := util.MergeConditions(util.SetStatusCondition,
 			&v.instance.Status.Conditions,
 			[]string{VRGConditionReasonUnused},
 			subconditions...)
