@@ -5,6 +5,8 @@ import copy
 import logging
 import os
 import platform
+from collections import namedtuple
+from functools import cache
 
 from . import yaml
 
@@ -64,12 +66,29 @@ _PLATFORM_DEFAULTS = {
     },
 }
 
+HostInfo = namedtuple("HostInfo", "operating_system,machine")
+
+
+@cache
+def host_info():
+    """
+    Return HostInfo tuple with OS name and CPU architecture.
+    """
+    info = HostInfo(
+        operating_system=platform.system().lower(),
+        machine=os.uname().machine,
+    )
+
+    logging.debug("[envfile] Detected os: '%s'", info.operating_system)
+    logging.debug("[envfile] Detected machine: '%s'", info.machine)
+
+    return info
+
 
 def platform_defaults():
     # By default, use provider defaults.
-    operating_system = platform.system().lower()
-    logging.debug("[envfile] Detected os: '%s'", operating_system)
-    return _PLATFORM_DEFAULTS.get(operating_system, _PLATFORM_DEFAULTS["__default__"])
+    os = host_info().operating_system
+    return _PLATFORM_DEFAULTS.get(os, _PLATFORM_DEFAULTS["__default__"])
 
 
 class MissingAddon(Exception):
@@ -169,23 +188,22 @@ def _validate_profile(profile, addons_root):
 
 def _validate_platform_defaults(profile):
     platform = platform_defaults()
-    machine = os.uname().machine
-    logging.debug("[envfile] Detected machine: '%s'", machine)
+    host = host_info()
 
     if profile["provider"] == PROVIDER:
-        profile["provider"] = platform[PROVIDER][machine]
+        profile["provider"] = platform[PROVIDER][host.machine]
 
     if profile["driver"] == VM:
-        profile["driver"] = platform[VM][machine]
+        profile["driver"] = platform[VM][host.machine]
     elif profile["driver"] == CONTAINER:
         profile["driver"] = platform[CONTAINER]
 
     if profile["network"] == SHARED_NETWORK:
-        profile["network"] = platform[SHARED_NETWORK][machine]
+        profile["network"] = platform[SHARED_NETWORK][host.machine]
 
-    logging.debug("[envfile] Using provider: '%s'", profile["provider"])
-    logging.debug("[envfile] Using driver: '%s'", profile["driver"])
-    logging.debug("[envfile] Using network: '%s'", profile["network"])
+    logging.debug("[%s] Using provider: '%s'", profile["name"], profile["provider"])
+    logging.debug("[%s] Using driver: '%s'", profile["name"], profile["driver"])
+    logging.debug("[%s] Using network: '%s'", profile["name"], profile["network"])
 
 
 def _validate_worker(worker, env, addons_root, index):
