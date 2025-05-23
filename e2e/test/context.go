@@ -8,18 +8,21 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/ramendr/ramen/e2e/dractions"
 	"github.com/ramendr/ramen/e2e/types"
+	"github.com/ramendr/ramen/e2e/util"
 )
 
 // Make it easier to manage namespaces created by the tests.
 const appNamespacePrefix = "e2e-"
 
 type Context struct {
-	ctx      types.Context
+	parent   types.Context
+	context  context.Context
 	workload types.Workload
 	deployer types.Deployer
 	name     string
@@ -27,18 +30,19 @@ type Context struct {
 }
 
 func NewContext(
-	ctx types.Context,
+	parent types.Context,
 	w types.Workload,
 	d types.Deployer,
 ) Context {
 	name := strings.ToLower(d.GetName() + "-" + w.GetName() + "-" + w.GetAppName())
 
 	return Context{
-		ctx:      ctx,
+		parent:   parent,
+		context:  parent.Context(),
 		workload: w,
 		deployer: d,
 		name:     name,
-		logger:   ctx.Logger().Named(name),
+		logger:   parent.Logger().Named(name),
 	}
 }
 
@@ -71,15 +75,24 @@ func (c *Context) Logger() *zap.SugaredLogger {
 }
 
 func (c *Context) Env() *types.Env {
-	return c.ctx.Env()
+	return c.parent.Env()
 }
 
 func (c *Context) Config() *types.Config {
-	return c.ctx.Config()
+	return c.parent.Config()
 }
 
 func (c *Context) Context() context.Context {
-	return c.ctx.Context()
+	return c.context
+}
+
+// WithTimeout returns a derived context with a deadline. Call cancel to release resources associated with the context
+// as soon as the operation running in the context complete.
+func (c Context) WithTimeout(d time.Duration) (*Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(c.context, d)
+	c.context = ctx //nolint:revive
+
+	return &c, cancel
 }
 
 // Validated return an error if the combination of deployer and workload is not supported.
@@ -92,7 +105,10 @@ func (c *Context) Deploy(dt *testing.T) {
 	t := WithLog(dt, c.logger)
 	t.Helper()
 
-	if err := c.deployer.Deploy(c); err != nil {
+	timedCtx, cancel := c.WithTimeout(util.Timeout)
+	defer cancel()
+
+	if err := timedCtx.deployer.Deploy(timedCtx); err != nil {
 		t.Fatalf("Failed to deploy workload: %s", err)
 	}
 }
@@ -101,7 +117,10 @@ func (c *Context) Undeploy(dt *testing.T) {
 	t := WithLog(dt, c.logger)
 	t.Helper()
 
-	if err := c.deployer.Undeploy(c); err != nil {
+	timedCtx, cancel := c.WithTimeout(util.Timeout)
+	defer cancel()
+
+	if err := timedCtx.deployer.Undeploy(timedCtx); err != nil {
 		t.Fatalf("Failed to undeploy workload: %s", err)
 	}
 }
@@ -110,7 +129,10 @@ func (c *Context) Enable(dt *testing.T) {
 	t := WithLog(dt, c.logger)
 	t.Helper()
 
-	if err := dractions.EnableProtection(c); err != nil {
+	timedCtx, cancel := c.WithTimeout(util.Timeout)
+	defer cancel()
+
+	if err := dractions.EnableProtection(timedCtx); err != nil {
 		t.Fatalf("Failed to enable protection for workload: %s", err)
 	}
 }
@@ -119,7 +141,10 @@ func (c *Context) Disable(dt *testing.T) {
 	t := WithLog(dt, c.logger)
 	t.Helper()
 
-	if err := dractions.DisableProtection(c); err != nil {
+	timedCtx, cancel := c.WithTimeout(util.Timeout)
+	defer cancel()
+
+	if err := dractions.DisableProtection(timedCtx); err != nil {
 		t.Fatalf("Failed to disable protection for workload: %s", err)
 	}
 }
@@ -128,7 +153,10 @@ func (c *Context) Failover(dt *testing.T) {
 	t := WithLog(dt, c.logger)
 	t.Helper()
 
-	if err := dractions.Failover(c); err != nil {
+	timedCtx, cancel := c.WithTimeout(util.Timeout)
+	defer cancel()
+
+	if err := dractions.Failover(timedCtx); err != nil {
 		t.Fatalf("Failed to failover workload: %s", err)
 	}
 }
@@ -137,7 +165,10 @@ func (c *Context) Relocate(dt *testing.T) {
 	t := WithLog(dt, c.logger)
 	t.Helper()
 
-	if err := dractions.Relocate(c); err != nil {
+	timedCtx, cancel := c.WithTimeout(util.Timeout)
+	defer cancel()
+
+	if err := dractions.Relocate(timedCtx); err != nil {
 		t.Fatalf("Failed to relocate workload: %s", err)
 	}
 }

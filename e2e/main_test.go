@@ -7,7 +7,9 @@ import (
 	"context"
 	"flag"
 	"os"
+	"os/signal"
 	"testing"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -22,9 +24,10 @@ import (
 
 // Context implements types.Context for sharing the log, env, and config with all code.
 type Context struct {
-	log    *zap.SugaredLogger
-	env    *types.Env
-	config *types.Config
+	log     *zap.SugaredLogger
+	env     *types.Env
+	config  *types.Config
+	context context.Context
 }
 
 func (c *Context) Logger() *zap.SugaredLogger {
@@ -40,13 +43,26 @@ func (c *Context) Env() *types.Env {
 }
 
 func (c *Context) Context() context.Context {
-	return context.Background()
+	return c.context
+}
+
+// WithTimeout returns a derived context with a deadline. Call cancel to release resources associated with the context
+// as soon as the operation running in the context complete.
+func (c Context) WithTimeout(d time.Duration) (*Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(c.context, d)
+	c.context = ctx //nolint:revive
+
+	return &c, cancel
 }
 
 // The global test context.
 var Ctx Context
 
 func TestMain(m *testing.M) {
+	os.Exit(testMain(m))
+}
+
+func testMain(m *testing.M) int {
 	var (
 		err        error
 		configFile string
@@ -61,7 +77,10 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	// TODO: Sync the log on exit
+
+	defer func() {
+		_ = Ctx.log.Sync() //nolint:errcheck
+	}()
 
 	log := Ctx.log
 
@@ -75,16 +94,25 @@ func TestMain(m *testing.M) {
 
 	Ctx.config, err = config.ReadConfig(configFile, options)
 	if err != nil {
-		log.Fatalf("Failed to read config: %s", err)
+		log.Errorf("Failed to read config: %s", err)
+
+		return 1
 	}
+
+	// The context will be canceled when receiving a signal.
+	var stop context.CancelFunc
+	Ctx.context, stop = signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
 
 	Ctx.env, err = env.New(Ctx.Context(), Ctx.config, Ctx.log)
 	if err != nil {
-		log.Fatalf("Failed to create testing context: %s", err)
+		log.Errorf("Failed to create testing context: %s", err)
+
+		return 1
 	}
 
 	log.Infof("Using Timeout: %v", util.Timeout)
 	log.Infof("Using RetryInterval: %v", util.RetryInterval)
 
-	os.Exit(m.Run())
+	return m.Run()
 }

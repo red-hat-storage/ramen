@@ -4,9 +4,6 @@
 package util
 
 import (
-	"fmt"
-	"time"
-
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,12 +17,12 @@ import (
 // More info: https://volsync.readthedocs.io/en/stable/usage/permissionmodel.html#controlling-mover-permissions
 const volsyncPrivilegedMovers = "volsync.backube/privileged-movers"
 
-func CreateNamespace(ctx types.Context, cluster types.Cluster, namespace string) error {
+func CreateNamespace(ctx types.Context, cluster types.Cluster, name string) error {
 	log := ctx.Logger()
 
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: namespace,
+			Name: name,
 		},
 	}
 
@@ -35,20 +32,20 @@ func CreateNamespace(ctx types.Context, cluster types.Cluster, namespace string)
 			return err
 		}
 
-		log.Debugf("Namespace %q already exist in cluster %q", namespace, cluster.Name)
+		log.Debugf("Namespace %q already exist in cluster %q", name, cluster.Name)
 	}
 
-	log.Debugf("Created namespace %q in cluster %q", namespace, cluster.Name)
+	log.Debugf("Created namespace %q in cluster %q", name, cluster.Name)
 
 	return nil
 }
 
-func DeleteNamespace(ctx types.Context, cluster types.Cluster, namespace string) error {
+func DeleteNamespace(ctx types.Context, cluster types.Cluster, name string) error {
 	log := ctx.Logger()
 
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: namespace,
+			Name: name,
 		},
 	}
 
@@ -58,35 +55,12 @@ func DeleteNamespace(ctx types.Context, cluster types.Cluster, namespace string)
 			return err
 		}
 
-		log.Debugf("Namespace %q not found in cluster %q", namespace, cluster.Name)
+		log.Debugf("Namespace %q not found in cluster %q", name, cluster.Name)
 
 		return nil
 	}
 
-	log.Debugf("Waiting until namespace %q is deleted in cluster %q", namespace, cluster.Name)
-
-	startTime := time.Now()
-	key := k8stypes.NamespacedName{Name: namespace}
-
-	for {
-		if err := cluster.Client.Get(ctx.Context(), key, ns); err != nil {
-			if !k8serrors.IsNotFound(err) {
-				return err
-			}
-
-			log.Debugf("Namespace %q deleted in cluster %q", namespace, cluster.Name)
-
-			return nil
-		}
-
-		if time.Since(startTime) > 60*time.Second {
-			return fmt.Errorf("timeout deleting namespace %q in cluster %q", namespace, cluster.Name)
-		}
-
-		if err := Sleep(ctx.Context(), time.Second); err != nil {
-			return err
-		}
-	}
+	return nil
 }
 
 // Problem: currently we must manually add an annotation to application’s namespace to make volsync work.
