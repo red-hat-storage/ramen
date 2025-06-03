@@ -336,6 +336,8 @@ func (v *VRGInstance) kubeObjectsGroupCapture(
 		} else {
 			err := request.Status(v.log)
 			if err == nil {
+				log1.Info("Kube objects group captured", "start", request.StartTime(), "end", request.EndTime())
+
 				requestsCompletedCount++
 
 				continue
