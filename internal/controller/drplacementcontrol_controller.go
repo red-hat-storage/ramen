@@ -459,6 +459,7 @@ func isBeingDeleted(drpc *rmn.DRPlacementControl, usrPl client.Object) bool {
 		(usrPl != nil && rmnutil.ResourceIsDeleted(usrPl))
 }
 
+//nolint:unparam
 func (r *DRPlacementControlReconciler) reconcileDRPCInstance(d *DRPCInstance, log logr.Logger) (ctrl.Result, error) {
 	// Last status update time BEFORE we start processing
 	var beforeProcessing metav1.Time
@@ -566,7 +567,7 @@ func GetDRClusters(ctx context.Context, client client.Client, drPolicy *rmn.DRPo
 func (r DRPlacementControlReconciler) updateObjectMetadata(ctx context.Context,
 	drpc *rmn.DRPlacementControl, placementObj client.Object, log logr.Logger,
 ) error {
-	update := false
+	var update bool
 
 	update = rmnutil.AddLabel(drpc, rmnutil.OCMBackupLabelKey, rmnutil.OCMBackupLabelValue)
 	update = rmnutil.AddFinalizer(drpc, DRPCFinalizer) || update
