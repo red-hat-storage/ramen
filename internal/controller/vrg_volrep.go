@@ -1411,18 +1411,25 @@ func (v *VRGInstance) checkVRStatus(volRep *volrep.VolumeReplication) bool {
 //
 // We handle 3 cases:
 //   - Primary deleted VRG: If Validated condition exists and false, the VR will never complete and can be
-//     deleted safely. Otherwise Completed condition is checked.
-//   - Primary VRG: Completed condition is checked.
+//     deleted safely.
+//   - Primary VRG: Validated condition is checked, and if successful the Completed conditions is also checked.
 //   - Secondary VRG: Completed, Degraded and Resyncing conditions are checked and ensured healthy.
 func (v *VRGInstance) validateVRStatus(volRep *volrep.VolumeReplication, state ramendrv1alpha1.ReplicationState) bool {
-	// Check validated for primary during VRG deletion.
-	if state == ramendrv1alpha1.Primary && rmnutil.ResourceIsDeleted(v.instance) {
-		validated, ok := v.validateVRValidatedStatus(volRep)
-		if !validated && ok {
-			v.log.Info(fmt.Sprintf("VolumeReplication %s/%s failed validation and can be deleted",
-				volRep.GetName(), volRep.GetNamespace()))
+	// If primary, check the validated condition.
+	if state == ramendrv1alpha1.Primary {
+		validated, condState := v.validateVRValidatedStatus(volRep)
+		if !validated && condState != conditionMissing {
+			// If the condition is known, this VR will never complete since it failed initial validation.
+			if condState == conditionKnown {
+				v.log.Info(fmt.Sprintf("VolumeReplication %s/%s failed validation and can be deleted",
+					volRep.GetName(), volRep.GetNamespace()))
 
-			return true
+				// If the VRG is deleted the VR has reached the desired state.
+				return rmnutil.ResourceIsDeleted(v.instance)
+			}
+
+			// The condition is stale or unknown so we need to check again later.
+			return false
 		}
 	}
 
@@ -1447,19 +1454,24 @@ func (v *VRGInstance) validateVRStatus(volRep *volrep.VolumeReplication, state r
 	return true
 }
 
-// validateVRValidatedStatus validates that VolumeReplicaion resource was validated.
-// Return 2 booleans
+// validateVRValidatedStatus validates that VolumeReplication resource was validated.
+// Returns 2 values:
 // - validated: true if the condition is true, otherwise false
-// - ok: true if the check was succeesfull, false if the condition is missing, stale, or unknown.
+// - state: condition state
 func (v *VRGInstance) validateVRValidatedStatus(
 	volRep *volrep.VolumeReplication,
-) (bool, bool) {
-	conditionMet, errorMsg := isVRConditionMet(volRep, volrep.ConditionValidated, metav1.ConditionTrue)
-	if errorMsg != "" {
-		v.log.Info(fmt.Sprintf("%s (VolRep: %s/%s)", errorMsg, volRep.GetName(), volRep.GetNamespace()))
+) (bool, conditionState) {
+	conditionMet, condState, errorMsg := isVRConditionMet(volRep, volrep.ConditionValidated, metav1.ConditionTrue)
+	if !conditionMet && condState != conditionMissing {
+		defaultMsg := "VolumeReplication resource not validated"
+		v.updatePVCDataReadyConditionHelper(volRep.Namespace, volRep.Name, VRGConditionReasonError, errorMsg,
+			defaultMsg)
+		v.updatePVCDataProtectedConditionHelper(volRep.Namespace, volRep.Name, VRGConditionReasonError, errorMsg,
+			defaultMsg)
+		v.log.Info(fmt.Sprintf("%s (VolRep: %s/%s)", defaultMsg, volRep.Name, volRep.Namespace))
 	}
 
-	return conditionMet, errorMsg == ""
+	return conditionMet, condState
 }
 
 // validateVRCompletedStatus validates if the VolumeReplication resource Completed condition is met and update
@@ -1483,7 +1495,7 @@ func (v *VRGInstance) validateVRCompletedStatus(
 		action = "demoted"
 	}
 
-	conditionMet, msg := isVRConditionMet(volRep, volrep.ConditionCompleted, metav1.ConditionTrue)
+	conditionMet, _, msg := isVRConditionMet(volRep, volrep.ConditionCompleted, metav1.ConditionTrue)
 	if !conditionMet {
 		defaultMsg := fmt.Sprintf("VolumeReplication resource for pvc not %s to %s", action, stateString)
 		v.updatePVCDataReadyConditionHelper(volRep.Namespace, volRep.Name, VRGConditionReasonError, msg,
@@ -1520,12 +1532,12 @@ func (v *VRGInstance) validateAdditionalVRStatusForSecondary(volRep *volrep.Volu
 	v.updatePVCLastSyncDuration(volRep.Namespace, volRep.Name, nil)
 	v.updatePVCLastSyncBytes(volRep.Namespace, volRep.Name, nil)
 
-	conditionMet, _ := isVRConditionMet(volRep, volrep.ConditionResyncing, metav1.ConditionTrue)
+	conditionMet, _, _ := isVRConditionMet(volRep, volrep.ConditionResyncing, metav1.ConditionTrue)
 	if !conditionMet {
 		return v.checkResyncCompletionAsSecondary(volRep)
 	}
 
-	conditionMet, msg := isVRConditionMet(volRep, volrep.ConditionDegraded, metav1.ConditionTrue)
+	conditionMet, _, msg := isVRConditionMet(volRep, volrep.ConditionDegraded, metav1.ConditionTrue)
 	if !conditionMet {
 		v.updatePVCDataProtectedConditionHelper(volRep.Namespace, volRep.Name, VRGConditionReasonError, msg,
 			"VolumeReplication resource for pvc is not in Degraded condition while resyncing")
@@ -1551,7 +1563,7 @@ func (v *VRGInstance) validateAdditionalVRStatusForSecondary(volRep *volrep.Volu
 
 // checkResyncCompletionAsSecondary returns true if resync status is complete as secondary, false otherwise
 func (v *VRGInstance) checkResyncCompletionAsSecondary(volRep *volrep.VolumeReplication) bool {
-	conditionMet, msg := isVRConditionMet(volRep, volrep.ConditionResyncing, metav1.ConditionFalse)
+	conditionMet, _, msg := isVRConditionMet(volRep, volrep.ConditionResyncing, metav1.ConditionFalse)
 	if !conditionMet {
 		defaultMsg := "VolumeReplication resource for pvc not syncing as Secondary"
 		v.updatePVCDataReadyConditionHelper(volRep.Namespace, volRep.Name, VRGConditionReasonError, msg,
@@ -1565,7 +1577,7 @@ func (v *VRGInstance) checkResyncCompletionAsSecondary(volRep *volrep.VolumeRepl
 		return false
 	}
 
-	conditionMet, msg = isVRConditionMet(volRep, volrep.ConditionDegraded, metav1.ConditionFalse)
+	conditionMet, _, msg = isVRConditionMet(volRep, volrep.ConditionDegraded, metav1.ConditionFalse)
 	if !conditionMet {
 		defaultMsg := "VolumeReplication resource for pvc is not syncing and is degraded as Secondary"
 		v.updatePVCDataReadyConditionHelper(volRep.Namespace, volRep.Name, VRGConditionReasonError, msg,
@@ -1589,35 +1601,54 @@ func (v *VRGInstance) checkResyncCompletionAsSecondary(volRep *volrep.VolumeRepl
 	return true
 }
 
-// isVRConditionMet returns true if the condition is met, and an error mesage if we could not get the
-// condition value.
+type conditionState string
+
+const (
+	conditionMissing = conditionState("missing")
+	conditionStale   = conditionState("stale")
+	conditionUnknown = conditionState("unknown")
+	conditionKnown   = conditionState("known")
+)
+
+// isVRConditionMet check if condition is met.
+// Returns 3 values:
+//   - met: true if the condition status matches the desired status, otherwise false
+//   - state: one of (conditionMissing, conditionStale, conditionUnknown, conditionKnown)
+//   - errorMsg: error message describing why the condition is not met
 func isVRConditionMet(volRep *volrep.VolumeReplication,
 	conditionType string,
 	desiredStatus metav1.ConditionStatus,
-) (bool, string) {
+) (bool, conditionState, string) {
+	met := true
+
 	volRepCondition := findCondition(volRep.Status.Conditions, conditionType)
 	if volRepCondition == nil {
 		errorMsg := fmt.Sprintf("Failed to get the %s condition from status of VolumeReplication resource.",
 			conditionType)
 
-		return false, errorMsg
+		return !met, conditionMissing, errorMsg
 	}
 
 	if volRep.Generation != volRepCondition.ObservedGeneration {
 		errorMsg := fmt.Sprintf("Stale generation for condition %s from status of VolumeReplication resource.",
 			conditionType)
 
-		return false, errorMsg
+		return !met, conditionStale, errorMsg
 	}
 
 	if volRepCondition.Status == metav1.ConditionUnknown {
 		errorMsg := fmt.Sprintf("Unknown status for condition %s from status of VolumeReplication resource.",
 			conditionType)
 
-		return false, errorMsg
+		return !met, conditionUnknown, errorMsg
 	}
 
-	return volRepCondition.Status == desiredStatus, ""
+	if volRepCondition.Status != desiredStatus {
+		// csi-addons > 0.10.0 returns detailed error message
+		return !met, conditionKnown, volRepCondition.Message
+	}
+
+	return met, conditionKnown, ""
 }
 
 // Disabling unparam linter as currently every invokation of this
