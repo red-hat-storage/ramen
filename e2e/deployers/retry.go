@@ -19,6 +19,9 @@ func waitSubscriptionPhase(
 ) error {
 	log := ctx.Logger()
 
+	log.Debugf("Waiting until subscription \"%s/%s\" reach phase %q in cluster %q",
+		namespace, name, phase, ctx.Env().Hub.Name)
+
 	for {
 		sub, err := getSubscription(ctx, namespace, name)
 		if err != nil {
@@ -43,6 +46,8 @@ func WaitWorkloadHealth(ctx types.TestContext, cluster types.Cluster, namespace 
 	log := ctx.Logger()
 	w := ctx.Workload()
 
+	log.Debugf("Waiting until workload \"%s/%s\" is healthy in cluster %q", namespace, w.GetAppName(), cluster.Name)
+
 	for {
 		err := w.Health(ctx, cluster, namespace)
 		if err == nil {
@@ -52,8 +57,8 @@ func WaitWorkloadHealth(ctx types.TestContext, cluster types.Cluster, namespace 
 		}
 
 		if err := util.Sleep(ctx.Context(), util.RetryInterval); err != nil {
-			return fmt.Errorf("workload %q is not healthy in cluster %q: %w",
-				w.GetName(), cluster.Name, err)
+			return fmt.Errorf("workload \"%s/%s\" is not healthy in cluster %q: %w",
+				namespace, w.GetAppName(), cluster.Name, err)
 		}
 	}
 }

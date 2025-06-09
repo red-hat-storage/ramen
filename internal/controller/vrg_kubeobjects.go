@@ -26,6 +26,8 @@ import (
 
 var ErrWorkflowNotFound = fmt.Errorf("backup or restore workflow not found")
 
+const RecipeMaxAttempts = 10
+
 func kubeObjectsCaptureInterval(kubeObjectProtectionSpec *ramen.KubeObjectProtectionSpec) time.Duration {
 	if kubeObjectProtectionSpec.CaptureInterval == nil {
 		return ramen.KubeObjectProtectionCaptureIntervalDefault
@@ -229,9 +231,34 @@ func (v *VRGInstance) kubeObjectsCaptureStartOrResume(
 	annotations := map[string]string{vrgGenerationKey: strconv.FormatInt(generation, vrgGenerationNumberBase)}
 	labels := util.OwnerLabels(v.instance)
 
+	if v.recipeElements.StopRecipeReconcile {
+		v.kubeObjectsCaptureStatusFalse("KubeObjectsCaptureError",
+			"user stopped recipe reconciliation using recipe parameters")
+
+		return
+	}
+
 	allEssentialStepsFailed, err := v.executeCaptureSteps(result, pathName, capturePathName, namePrefix,
 		veleroNamespaceName, captureInProgressStatusUpdate, annotations, requests, log)
 	if err != nil {
+		rStatus, ok := v.reconciler.recipeRetries.Load(v.namespacedName)
+		if !ok {
+			v.reconciler.recipeRetries.Store(v.namespacedName, 0)
+		}
+
+		val, ok := rStatus.(int)
+		if ok {
+			val++
+		}
+
+		v.reconciler.recipeRetries.Store(v.namespacedName, val)
+
+		if val > RecipeMaxAttempts {
+			v.kubeObjectsCaptureStatusFalse("KubeObjectsCaptureError", "recipe reconcile failed for more that max attempts")
+
+			return
+		}
+
 		result.Requeue = true
 
 		return
@@ -278,6 +305,7 @@ func (v *VRGInstance) executeCaptureSteps(result *ctrl.Result, pathName, capture
 	requestsProcessedCount := 0
 	requestsCompletedCount := 0
 	labels := util.OwnerLabels(v.instance)
+	labels[util.VeleroKubevirtMetadataOnlyBackupLabel] = "true"
 
 	for groupNumber, captureGroup := range captureSteps {
 		var err error
@@ -383,8 +411,6 @@ func (v *VRGInstance) kubeObjectsGroupCapture(
 		} else {
 			err := request.Status(v.log)
 			if err == nil {
-				log1.Info("Kube objects group captured", "start", request.StartTime(), "end", request.EndTime())
-
 				requestsCompletedCount++
 
 				continue
@@ -491,6 +517,7 @@ func (v *VRGInstance) kubeObjectsCaptureIdentifierUpdateComplete(
 		return
 	}
 
+	v.reconciler.recipeRetries.Store(v.namespacedName, 0)
 	v.kubeObjectsCaptureStatusTrue(VRGConditionReasonUploaded, kubeObjectsClusterDataProtectedTrueMessage)
 
 	captureStartTimeSince := time.Since(captureToRecoverFromIdentifier.StartTime.Time)

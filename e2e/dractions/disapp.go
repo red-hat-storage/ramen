@@ -4,13 +4,9 @@
 package dractions
 
 import (
-	"fmt"
-
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
 
-	"github.com/ramendr/ramen/e2e/config"
 	"github.com/ramendr/ramen/e2e/deployers"
-	"github.com/ramendr/ramen/e2e/env"
 	"github.com/ramendr/ramen/e2e/types"
 	"github.com/ramendr/ramen/e2e/util"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -52,13 +48,17 @@ func EnableProtectionDiscoveredApps(ctx types.TestContext) error {
 		return err
 	}
 
-	if err := createNamespacesDiscoveredApps(ctx, appNamespace); err != nil {
+	if err := util.AddVolsyncAnnontationOnManagedClusters(ctx, appNamespace); err != nil {
 		return err
 	}
 
 	// wait for drpc ready
 	err := waitDRPCReady(ctx, managementNamespace, drpcName)
 	if err != nil {
+		return err
+	}
+
+	if err = deployers.WaitWorkloadHealth(ctx, cluster, appNamespace); err != nil {
 		return err
 	}
 
@@ -79,7 +79,7 @@ func DisableProtectionDiscoveredApps(ctx types.TestContext) error {
 	placementName := name
 	drpcName := name
 
-	clusterName, err := util.GetCurrentCluster(ctx, managementNamespace, placementName)
+	cluster, err := util.GetCurrentCluster(ctx, managementNamespace, placementName)
 	if err != nil {
 		if !k8serrors.IsNotFound(err) {
 			return err
@@ -89,7 +89,7 @@ func DisableProtectionDiscoveredApps(ctx types.TestContext) error {
 		log.Infof("Unprotecting workload \"%s/%s\"", appNamespace, ctx.Workload().GetAppName())
 	} else {
 		log.Infof("Unprotecting workload \"%s/%s\" in cluster %q",
-			appNamespace, ctx.Workload().GetAppName(), clusterName)
+			appNamespace, ctx.Workload().GetAppName(), cluster.Name)
 	}
 
 	if err := deleteDRPC(ctx, managementNamespace, drpcName); err != nil {
@@ -129,8 +129,7 @@ func failoverRelocateDiscoveredApps(
 	ctx types.TestContext,
 	action ramen.DRAction,
 	state ramen.DRState,
-	currentClusterName string,
-	targetClusterName string,
+	currentCluster, targetCluster types.Cluster,
 ) error {
 	name := ctx.Name()
 	managementNamespace := ctx.ManagementNamespace()
@@ -138,17 +137,12 @@ func failoverRelocateDiscoveredApps(
 
 	drpcName := name
 
-	if err := waitAndUpdateDRPC(ctx, managementNamespace, drpcName, action, targetClusterName); err != nil {
+	if err := waitAndUpdateDRPC(ctx, managementNamespace, drpcName, action, targetCluster); err != nil {
 		return err
 	}
 
 	if err := waitDRPCProgression(ctx, managementNamespace, name,
 		ramen.ProgressionWaitOnUserToCleanUp); err != nil {
-		return err
-	}
-
-	currentCluster, err := env.GetCluster(ctx.Env(), currentClusterName)
-	if err != nil {
 		return err
 	}
 
@@ -165,26 +159,5 @@ func failoverRelocateDiscoveredApps(
 		return err
 	}
 
-	targetCluster, err := env.GetCluster(ctx.Env(), targetClusterName)
-	if err != nil {
-		return err
-	}
-
 	return deployers.WaitWorkloadHealth(ctx, targetCluster, appNamespace)
-}
-
-// createNamespacesDiscoveredApps creates namespaces and adds annotations for discovered app protection
-// based on the Kubernetes distribution.
-// For Kubernetes, creates namespaces and adds annotation on both DR clusters for volsync based replication.
-// For OpenShift, creates namespace only on the target DR cluster (c2) before failover.
-// Returns an error if the distribution is unknown, and if namespace creation or annotation fails.
-func createNamespacesDiscoveredApps(ctx types.TestContext, namespace string) error {
-	switch ctx.Config().Distro {
-	case config.DistroK8s:
-		return util.CreateNamespaceAndAddAnnotation(ctx, namespace)
-	case config.DistroOcp:
-		return util.CreateNamespace(ctx, ctx.Env().C2, namespace)
-	default:
-		return fmt.Errorf("unknown distro: %s", ctx.Config().Distro)
-	}
 }
