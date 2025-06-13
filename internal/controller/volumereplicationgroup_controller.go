@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -57,6 +58,7 @@ type VolumeReplicationGroupReconciler struct {
 	kubeObjects         kubeobjects.RequestsManager
 	RateLimiter         *workqueue.TypedRateLimiter[reconcile.Request]
 	veleroCRsAreWatched bool
+	recipeRetries       sync.Map
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -824,14 +826,7 @@ func (v *VRGInstance) getCGLabelValue(scName *string, pvcName, pvcNamespace stri
 		return "", fmt.Errorf("missing storageID for PVC %s/%s", pvcNamespace, pvcName)
 	}
 
-	// FIXME: a temporary workaround for issue DFBUGS-1209
-	// Remove this block once DFBUGS-1209 is fixed
-	cgLabelVal := "cephfs-" + storageID
-	if storageClass.Provisioner != DefaultCephFSCSIDriverName {
-		cgLabelVal = "rbd-" + storageID
-	}
-
-	return cgLabelVal, nil
+	return util.GenerateCombinedName(pvcNamespace, storageID), nil
 }
 
 func (v *VRGInstance) updateReplicationClassList() error {
@@ -1318,7 +1313,10 @@ func (v *VRGInstance) processAsPrimary() ctrl.Result {
 
 	v.reconcileAsPrimary()
 
-	if v.result.Requeue {
+	v.updateVRGDataReadyCondition()
+
+	// Check in memory VRGConditionTypeDataReady is true or not to proceed!
+	if !v.isConditionDataReady() {
 		return v.updateVRGConditionsAndStatus(v.result)
 	}
 
@@ -1828,6 +1826,39 @@ func (v *VRGInstance) updateProtectedCGs() error {
 	return nil
 }
 
+func (v *VRGInstance) logAndSetConditions(conditionName string, subconditions ...*metav1.Condition) {
+	msg := fmt.Sprintf("merging %s condition", conditionName)
+	v.log.Info(msg, "subconditions", subconditions)
+	finalCondition := util.MergeConditions(util.SetStatusCondition,
+		&v.instance.Status.Conditions,
+		[]string{VRGConditionReasonUnused},
+		subconditions...)
+	msg = fmt.Sprintf("updated %s status to %s", conditionName, finalCondition.Status)
+	v.log.Info(msg, "finalCondition", finalCondition)
+}
+
+func (v *VRGInstance) isConditionDataReady() bool {
+	dataReady := util.FindCondition(v.instance.Status.Conditions, VRGConditionTypeDataReady)
+	if dataReady.Status == metav1.ConditionTrue &&
+		dataReady.ObservedGeneration == v.instance.Generation {
+		return true
+	}
+
+	return false
+}
+
+func (v *VRGInstance) updateVRGDataReadyCondition() {
+	var volSyncDataReady *metav1.Condition
+	if v.instance.Spec.Sync == nil {
+		volSyncDataReady = v.aggregateVolSyncDataReadyCondition()
+	}
+
+	v.logAndSetConditions(VRGConditionTypeDataReady,
+		volSyncDataReady,
+		v.aggregateVolRepDataReadyCondition(),
+	)
+}
+
 // updateVRGConditions updates three summary conditions VRGConditionTypeDataReady,
 // VRGConditionTypeClusterDataProtected and VRGConditionDataProtected at the VRG
 // level based on the corresponding PVC level conditions in the VRG:
@@ -1835,39 +1866,23 @@ func (v *VRGInstance) updateProtectedCGs() error {
 // The VRGConditionTypeClusterDataReady summary condition is not a PVC level
 // condition and is updated elsewhere.
 func (v *VRGInstance) updateVRGConditions() {
-	logAndSet := func(conditionName string, subconditions ...*metav1.Condition) {
-		msg := fmt.Sprintf("merging %s condition", conditionName)
-		v.log.Info(msg, "subconditions", subconditions)
-		finalCondition := util.MergeConditions(util.SetStatusCondition,
-			&v.instance.Status.Conditions,
-			[]string{VRGConditionReasonUnused},
-			subconditions...)
-		msg = fmt.Sprintf("updated %s status to %s", conditionName, finalCondition.Status)
-		v.log.Info(msg, "finalCondition", finalCondition)
-	}
-
-	var volSyncDataReady, volSyncDataProtected, volSyncClusterDataProtected *metav1.Condition
+	var volSyncDataProtected, volSyncClusterDataProtected *metav1.Condition
 	if v.instance.Spec.Sync == nil {
-		volSyncDataReady = v.aggregateVolSyncDataReadyCondition()
 		volSyncDataProtected, volSyncClusterDataProtected = v.aggregateVolSyncDataProtectedConditions()
 	}
 
-	logAndSet(VRGConditionTypeDataReady,
-		volSyncDataReady,
-		v.aggregateVolRepDataReadyCondition(),
-	)
-
-	logAndSet(VRGConditionTypeDataProtected,
+	v.updateVRGDataReadyCondition()
+	v.logAndSetConditions(VRGConditionTypeDataProtected,
 		volSyncDataProtected,
 		v.aggregateVolRepDataProtectedCondition(),
 	)
-	logAndSet(VRGConditionTypeClusterDataProtected,
+	v.logAndSetConditions(VRGConditionTypeClusterDataProtected,
 		volSyncClusterDataProtected,
 		v.aggregateVolRepClusterDataProtectedCondition(),
 		v.vrgObjectProtected,
 		v.kubeObjectsProtected,
 	)
-	logAndSet(VRGConditionTypeNoClusterDataConflict,
+	v.logAndSetConditions(VRGConditionTypeNoClusterDataConflict,
 		v.aggregateVRGNoClusterDataConflictCondition(),
 	)
 	v.updateVRGLastGroupSyncTime()
@@ -2281,11 +2296,11 @@ func (v *VRGInstance) aggregateVRGNoClusterDataConflictCondition() *metav1.Condi
 func (v *VRGInstance) clusterDataConflict(msg string, status metav1.ConditionStatus) *metav1.Condition {
 	if v.instance.Spec.ReplicationState == ramendrv1alpha1.Primary {
 		return updateVRGNoClusterDataConflictCondition(
-			v.instance.Status.ObservedGeneration, status, VRGConditionReasonDataConflictPrimary,
+			v.instance.Generation, status, VRGConditionReasonDataConflictPrimary,
 			msg)
 	} else if v.instance.Spec.ReplicationState == ramendrv1alpha1.Secondary {
 		return updateVRGNoClusterDataConflictCondition(
-			v.instance.Status.ObservedGeneration, status, VRGConditionReasonDataConflictSecondary,
+			v.instance.Generation, status, VRGConditionReasonDataConflictSecondary,
 			msg)
 	}
 

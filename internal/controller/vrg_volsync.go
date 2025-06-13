@@ -15,6 +15,7 @@ import (
 	"github.com/ramendr/ramen/internal/controller/volsync"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 //nolint:gocognit,funlen,cyclop
@@ -38,7 +39,7 @@ func (v *VRGInstance) restorePVsAndPVCsForVolSync() (int, error) {
 		rdSpec.ProtectedPVC.Conditions = nil
 
 		cgLabelVal, ok := rdSpec.ProtectedPVC.Labels[ConsistencyGroupLabel]
-		if ok && util.IsCGEnabled(v.instance.Annotations) {
+		if ok && util.IsCGEnabledForVolSync(v.ctx, v.reconciler.APIReader, v.instance.Annotations) {
 			v.log.Info("The CG label from the primary cluster found in RDSpec", "Label", cgLabelVal)
 			// Get the CG label value for this cluster
 			cgLabelVal, err = v.getCGLabelValue(rdSpec.ProtectedPVC.StorageClassName,
@@ -122,6 +123,7 @@ func (v *VRGInstance) reconcileVolSyncAsPrimary(finalSyncPrepared *bool) (requeu
 	for _, pvc := range v.volSyncPVCs {
 		var finalSyncForPVCPrepared bool
 
+		// TODO: Add deleted PVC handling here?
 		requeuePVC := v.reconcilePVCAsVolSyncPrimary(pvc, &finalSyncForPVCPrepared)
 		if requeuePVC {
 			requeue = true
@@ -188,7 +190,7 @@ func (v *VRGInstance) reconcilePVCAsVolSyncPrimary(pvc corev1.PersistentVolumeCl
 	*finalSyncPrepared = true
 
 	cg, ok := pvc.Labels[ConsistencyGroupLabel]
-	if ok && util.IsCGEnabled(v.instance.Annotations) {
+	if ok && util.IsCGEnabledForVolSync(v.ctx, v.reconciler.APIReader, v.instance.Annotations) {
 		v.log.Info("PVC has CG label", "Labels", pvc.Labels)
 		cephfsCGHandler := cephfscg.NewVSCGHandler(
 			v.ctx, v.reconciler.Client, v.instance,
@@ -197,7 +199,7 @@ func (v *VRGInstance) reconcilePVCAsVolSyncPrimary(pvc corev1.PersistentVolumeCl
 		)
 
 		rgs, finalSyncComplete, err := cephfsCGHandler.CreateOrUpdateReplicationGroupSource(
-			v.instance.Name, v.instance.Namespace, v.instance.Spec.RunFinalSync,
+			v.instance.Name, pvc.Namespace, v.instance.Spec.RunFinalSync,
 		)
 		if err != nil {
 			setVRGConditionTypeVolSyncRepSourceSetupError(&protectedPVC.Conditions, v.instance.Generation,
@@ -259,6 +261,8 @@ func (v *VRGInstance) reconcileVolSyncAsSecondary() bool {
 
 		v.instance.Status.ProtectedPVCs = v.instance.Status.ProtectedPVCs[:idx]
 		v.log.Info("Protected PVCs left", "ProtectedPVCs", v.instance.Status.ProtectedPVCs)
+
+		v.updateWorkloadActivityAsSecondary()
 	}
 
 	// Reset status finalsync flags and condition
@@ -266,6 +270,37 @@ func (v *VRGInstance) reconcileVolSyncAsSecondary() bool {
 	v.instance.Status.FinalSyncComplete = false
 
 	return v.reconcileRDSpecForDeletionOrReplication()
+}
+
+// updateWorkloadActivityAsSecondary updates workload status of volsync PVCs if still in use by the workload. This is
+// useful to set DataReady on VRG as false if VRG is being reconciled as Secondary.
+func (v *VRGInstance) updateWorkloadActivityAsSecondary() {
+	for idx := range v.volSyncPVCs {
+		pvcNSName := types.NamespacedName{
+			Namespace: v.volSyncPVCs[idx].GetNamespace(),
+			Name:      v.volSyncPVCs[idx].GetName(),
+		}
+
+		inUse, err := v.volSyncHandler.IsPVCInUseByNonRDPod(pvcNSName)
+		if err != nil {
+			// As errors are ignored and do not update DataReady using the same, even if a false positive set workload
+			// as active unconditionally
+			v.volSyncHandler.SetWorkloadStatus("active")
+
+			v.log.Info("Failed to determine if pvc is in use", "error", err, "pvc", pvcNSName)
+
+			return
+		}
+
+		if inUse {
+			v.volSyncHandler.SetWorkloadStatus("active")
+
+			v.log.Info("One or more pvcs are in use as secondary, waiting for workload to be inactive",
+				"pvc", pvcNSName)
+
+			return
+		}
+	}
 }
 
 func (v *VRGInstance) reconcileRDSpecForDeletionOrReplication() bool {
@@ -276,6 +311,7 @@ func (v *VRGInstance) reconcileRDSpecForDeletionOrReplication() bool {
 		return requeue
 	}
 
+	// TODO: Deleted RDSpec should be handled here! CleanupRDNotInSpecList
 	for _, rdSpec := range v.instance.Spec.VolSync.RDSpec {
 		v.log.Info("Reconcile RD as Secondary", "RDSpec", rdSpec.ProtectedPVC.Name)
 
@@ -319,7 +355,7 @@ func (v *VRGInstance) reconcileCGMembership() (map[string]struct{}, bool, error)
 
 	for _, rdSpec := range v.instance.Spec.VolSync.RDSpec {
 		cgLabelVal, ok := rdSpec.ProtectedPVC.Labels[ConsistencyGroupLabel]
-		if ok && util.IsCGEnabled(v.instance.Annotations) {
+		if ok && util.IsCGEnabledForVolSync(v.ctx, v.reconciler.APIReader, v.instance.Annotations) {
 			v.log.Info("RDSpec contains the CG label from the primary cluster", "Label", cgLabelVal)
 			// Get the CG label value for this cluster
 			cgLabelVal, err := v.getCGLabelValue(rdSpec.ProtectedPVC.StorageClassName,
@@ -347,7 +383,7 @@ func (v *VRGInstance) createOrUpdateReplicationDestinations(
 ) (bool, error) {
 	requeue := false
 
-	for groupKey := range groups {
+	for groupKey, groupVal := range groups {
 		cephfsCGHandler := cephfscg.NewVSCGHandler(
 			v.ctx, v.reconciler.Client, v.instance,
 			&metav1.LabelSelector{MatchLabels: map[string]string{ConsistencyGroupLabel: groupKey}},
@@ -356,8 +392,18 @@ func (v *VRGInstance) createOrUpdateReplicationDestinations(
 
 		v.log.Info("Create ReplicationGroupDestination with RDSpecs", "RDSpecs", v.getRDSpecGroupName(groups[groupKey]))
 
+		namespace := v.commonProtectedPVCNamespace(groupVal)
+		if namespace == "" {
+			v.log.Error(fmt.Errorf("RDSpecs in the group %s have different namespaces", groupKey),
+				"Failed to create ReplicationGroupDestination")
+
+			requeue = true
+
+			return requeue, fmt.Errorf("RDSpecs in the group %s have different namespaces", groupKey)
+		}
+
 		replicationGroupDestination, err := cephfsCGHandler.CreateOrUpdateReplicationGroupDestination(
-			v.instance.Name, v.instance.Namespace, groups[groupKey],
+			v.instance.Name, namespace, groups[groupKey],
 		)
 		if err != nil {
 			v.log.Error(err, "Failed to create ReplicationGroupDestination")
@@ -385,6 +431,25 @@ func (v *VRGInstance) createOrUpdateReplicationDestinations(
 	}
 
 	return requeue, nil
+}
+
+// commonProtectedPVCNamespace returns the shared namespace of a group of VolSyncReplicationDestinationSpec.
+// If all items in the group have the same ProtectedPVC namespace, it returns that namespace; otherwise,
+// it returns an empty string.
+func (v *VRGInstance) commonProtectedPVCNamespace(destinationSpecs []ramendrv1alpha1.VolSyncReplicationDestinationSpec,
+) string {
+	if len(destinationSpecs) == 0 {
+		return ""
+	}
+
+	namespace := destinationSpecs[0].ProtectedPVC.Namespace
+	for _, spec := range destinationSpecs {
+		if spec.ProtectedPVC.Namespace != namespace {
+			return ""
+		}
+	}
+
+	return namespace
 }
 
 func (v *VRGInstance) getRDSpecGroupName(rdSpecs []ramendrv1alpha1.VolSyncReplicationDestinationSpec) string {
@@ -581,7 +646,7 @@ func (v *VRGInstance) pvcUnprotectVolSync(pvc corev1.PersistentVolumeClaim, log 
 
 		return
 	}
-	// TODO Delete ReplicationSource, ReplicationDestination, etc.
+	// TODO: Delete ReplicationSource, ReplicationDestination, etc.
 	v.pvcStatusDeleteIfPresent(pvc.Namespace, pvc.Name, log)
 }
 
@@ -603,7 +668,7 @@ func (v *VRGInstance) disownPVCs() error {
 	return nil
 }
 
-// cleanupResources this function deleted all RS, RD and VolumeSnapshots from its owner (VRG)
+// cleanupResources this function deleted all RS, RD, RGS, RGD and VolumeSnapshots from its owner
 func (v *VRGInstance) cleanupResources() error {
 	for idx := range v.volSyncPVCs {
 		pvc := &v.volSyncPVCs[idx]
@@ -634,6 +699,14 @@ func (v *VRGInstance) doCleanupResources(name, namespace string) error {
 	}
 
 	if err := v.volSyncHandler.DeleteSnapshots(namespace); err != nil {
+		return err
+	}
+
+	if err := cephfscg.DeleteRGS(v.ctx, v.reconciler.Client, name, namespace, v.log); err != nil {
+		return err
+	}
+
+	if err := cephfscg.DeleteRGD(v.ctx, v.reconciler.Client, name, namespace, v.log); err != nil {
 		return err
 	}
 

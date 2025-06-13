@@ -5,6 +5,7 @@ package util
 
 import (
 	"fmt"
+	"time"
 
 	k8stypes "k8s.io/apimachinery/pkg/types"
 	"open-cluster-management.io/api/cluster/v1beta1"
@@ -13,17 +14,20 @@ import (
 	"github.com/ramendr/ramen/e2e/types"
 )
 
-// GetCurrentCluster returns the name of the cluster where the workload is currently placed,
-// based on the PlacementDecision for the given Placement resource.
-// Assumes the PlacementDecision exists with a Decision.
+// TODO: Carried over from internal/controllers, this is not part of API, may need a better way to reference it!
+const PlacementDecisionReasonFailoverRetained = "RetainedForFailover"
+
+// GetCurrentCluster retrieves the cluster object where the workload is currently placed
+// by looking up the cluster name from the PlacementDecision and returning the corresponding
+// cluster from the environment. Requires an existing PlacementDecision with a valid decision.
 // Not applicable for discovered apps before enabling protection, as no Placement exists.
-func GetCurrentCluster(ctx types.Context, namespace string, placementName string) (string, error) {
-	placementDecision, err := waitPlacementDecision(ctx, namespace, placementName)
+func GetCurrentCluster(ctx types.Context, namespace string, placementName string) (types.Cluster, error) {
+	clusterDecision, err := getClusterDecisionFromPlacement(ctx, namespace, placementName)
 	if err != nil {
-		return "", err
+		return types.Cluster{}, err
 	}
 
-	return placementDecision.Status.Decisions[0].ClusterName, nil
+	return ctx.Env().GetCluster(clusterDecision.ClusterName)
 }
 
 func GetPlacement(ctx types.Context, namespace, name string) (*v1beta1.Placement, error) {
@@ -40,10 +44,16 @@ func GetPlacement(ctx types.Context, namespace, name string) (*v1beta1.Placement
 	return placement, nil
 }
 
-// waitPlacementDecision waits until we have a placement decision and returns the placement decision object.
-func waitPlacementDecision(ctx types.Context, namespace string, placementName string,
-) (*v1beta1.PlacementDecision, error) {
+// getClusterDecisionFromPlacement waits until we have a placement decision and returns the cluster decision
+//
+//nolint:gocognit
+func getClusterDecisionFromPlacement(ctx types.Context, namespace string, placementName string,
+) (*v1beta1.ClusterDecision, error) {
+	log := ctx.Logger()
 	cluster := ctx.Env().Hub
+	start := time.Now()
+
+	log.Debugf("Waiting for placement decisions for \"%s/%s\" in cluster %q", namespace, placementName, cluster.Name)
 
 	for {
 		placement, err := GetPlacement(ctx, namespace, placementName)
@@ -56,8 +66,18 @@ func waitPlacementDecision(ctx types.Context, namespace string, placementName st
 			return nil, err
 		}
 
-		if placementDecision != nil && len(placementDecision.Status.Decisions) > 0 {
-			return placementDecision, nil
+		if placementDecision != nil {
+			for idx := range placementDecision.Status.Decisions {
+				if placementDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonFailoverRetained {
+					continue
+				}
+
+				elapsed := time.Since(start)
+				log.Debugf("Placement decisions for \"%s/%s\" available in cluster %q in %.3f seconds",
+					namespace, placementName, cluster.Name, elapsed.Seconds())
+
+				return &placementDecision.Status.Decisions[idx], nil
+			}
 		}
 
 		if err := Sleep(ctx.Context(), RetryInterval); err != nil {
@@ -98,10 +118,20 @@ func getPlacementDecisionFromPlacement(ctx types.Context, placement *v1beta1.Pla
 	plDecision := plDecisions.Items[0]
 	// r.Log.Info("Found ClusterDecision", "ClsDedicision", plDecision.Status.Decisions)
 
-	if len(plDecision.Status.Decisions) > 1 {
+	decisionCount := 0
+
+	for idx := range plDecision.Status.Decisions {
+		if plDecision.Status.Decisions[idx].Reason == PlacementDecisionReasonFailoverRetained {
+			continue
+		}
+
+		decisionCount++
+	}
+
+	if decisionCount > 1 {
 		return nil, fmt.Errorf("multiple placements found in PlacementDecision"+
 			" (count: %d, Placement: %s, PlacementDecision: %s) in cluster %q",
-			len(plDecision.Status.Decisions),
+			decisionCount,
 			placement.GetNamespace()+"/"+placement.GetName(),
 			plDecision.GetName()+"/"+plDecision.GetNamespace(), hub.Name)
 	}

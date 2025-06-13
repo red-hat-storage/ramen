@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -30,10 +31,12 @@ const (
 	// When this annotation is set to true, VolSync will protect RBD PVCs.
 	UseVolSyncAnnotation = "drplacementcontrol.ramendr.openshift.io/use-volsync-for-pvc-protection"
 
-	JobNameMaxLength     = validation.DNS1123LabelMaxLength
-	ServiceNameMaxLength = validation.DNS1123LabelMaxLength
+	MaxK8sLabelLength = validation.DNS1123LabelMaxLength
+	MaxK8sNameLength  = validation.DNS1123LabelMaxLength
 
 	CreatedByRamenLabel = "ramendr.openshift.io/created-by-ramen"
+
+	VGSCRDName = "volumegroupsnapshots.groupsnapshot.storage.k8s.io"
 )
 
 type ResourceUpdater struct {
@@ -248,8 +251,31 @@ func CreateNamespaceIfNotExists(ctx context.Context, k8sClient client.Client, na
 	return nil
 }
 
+// IsCGEnabled checks whether the workload has requested Consistency Group (CG) protection
+// by looking for the 'drplacementcontrol.ramendr.openshift.io/is-cg-enabled' in the passed in annotations.
+// It returns true if the annotation value is "true", indicating CG protection is requested.
+// Note: this is a temporary solution until we move to using CG everywhere,
 func IsCGEnabled(annotations map[string]string) bool {
 	return annotations[IsCGEnabledAnnotation] == "true"
+}
+
+// IsCGEnabledForVolSync determines whether consistency group (CG) protection is enabled for CephFS volumes.
+// It checks:
+// 1. Whether the workload is annotated to request CG protection.
+// 2. Whether the VolumeGroupSnapshot CRD is installed.
+// Both conditions must be true for CephFS CG protection to be considered enabled.
+func IsCGEnabledForVolSync(ctx context.Context, apiReader client.Reader, annotations map[string]string) bool {
+	return IsCGEnabled(annotations) && IsCRDInstalled(ctx, apiReader, VGSCRDName)
+}
+
+// IsCRDInstalled checks whether a specific CustomResourceDefinition (CRD) is installed on the cluster.
+func IsCRDInstalled(ctx context.Context, apiReader client.Reader, crdName string) bool {
+	installedCRD := &apiextensionsv1.CustomResourceDefinition{}
+	if err := apiReader.Get(ctx, types.NamespacedName{Name: crdName}, installedCRD); err != nil {
+		return false
+	}
+
+	return true
 }
 
 func IsPVCMarkedForVolSync(annotations map[string]string) bool {
@@ -266,11 +292,11 @@ func TrimToK8sResourceNameLength(name string) string {
 }
 
 func GetJobName(namePrefix string, ownerName string) string {
-	return getShortenedResourceName(namePrefix, ownerName, JobNameMaxLength)
+	return getShortenedResourceName(namePrefix, ownerName, MaxK8sNameLength)
 }
 
 func GetServiceName(namePrefix string, ownerName string) string {
-	return getShortenedResourceName(namePrefix, ownerName, ServiceNameMaxLength)
+	return getShortenedResourceName(namePrefix, ownerName, MaxK8sNameLength)
 }
 
 func getShortenedResourceName(namePrefix string, ownerName string, maxLength int) string {
@@ -284,12 +310,38 @@ func getShortenedResourceName(namePrefix string, ownerName string, maxLength int
 	return name
 }
 
+func GetRID() string {
+	return GetHashedName(uuid.New().String())
+}
+
 // Implements the string shortening algorithm, required to match volsync resources names.
 // https://github.com/backube/volsync/pull/1519
 func GetHashedName(name string) string {
 	return fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(name)))
 }
 
-func GetRID() string {
-	return GetHashedName(uuid.New().String())
+// GenerateCombinedName returns a string in the form "name-storageID", ensuring the total
+// length does not exceed MaxK8sLabelLength. If the combined length is too long, it first
+// replaces the name with its hash. If that's still too long, it hashes both the name and
+// the storageID, returning "nameHash-storageIDHash".
+func GenerateCombinedName(name, storageID string) string {
+	const labelSeparator = "-"
+
+	combined := name + labelSeparator + storageID
+	if len(combined) <= MaxK8sLabelLength {
+		return combined
+	}
+
+	maxNameLength := MaxK8sLabelLength - len(storageID) - len(labelSeparator)
+
+	nameHash := GetHashedName(name)
+	// If the new nameHash value is empty, return nameHash-storageIDHash
+	if maxNameLength <= 0 {
+		// Hashed name and hashed storage ID
+		// e.g. "nameHash-storageIDHash"
+		return nameHash + labelSeparator + GetHashedName(storageID)
+	}
+	// Otherwise, return Hashed 8 character name and append storageID
+	// e.g. "nameHash.storageID"
+	return nameHash + labelSeparator + storageID
 }

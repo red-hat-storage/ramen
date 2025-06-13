@@ -13,7 +13,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	k8stypes "k8s.io/apimachinery/pkg/types"
 	ocmv1b1 "open-cluster-management.io/api/cluster/v1beta1"
 	ocmv1b2 "open-cluster-management.io/api/cluster/v1beta2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -77,34 +76,60 @@ func WaitForDRPCDelete(ctx types.Context, cluster types.Cluster, name, namespace
 }
 
 func WaitForNamespaceDelete(ctx types.Context, cluster types.Cluster, name string) error {
+	log := ctx.Logger()
 	obj := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 		},
 	}
 
+	managed, err := isManagedByRamenE2e(ctx, cluster, obj)
+	if err != nil {
+		if !k8serrors.IsNotFound(err) {
+			return err
+		}
+
+		log.Debugf("Namespace %q not found in cluster %q", name, cluster.Name)
+
+		return nil
+	}
+
+	if !managed {
+		log.Warnf("Skipping wait for deletion of namespace %q in cluster %q: "+
+			"not managed by ramen-e2e (missing label %s=%s)", name, cluster.Name, managedByLabel, ramenE2e)
+
+		return nil
+	}
+
 	return waitForResourceDelete(ctx, cluster, obj)
+}
+
+// WaitForNamespaceDeleteOnManagedClusters waits for namespaces on both drclusters with ramen-e2e label.
+func WaitForNamespaceDeleteOnManagedClusters(ctx types.Context, name string) error {
+	if err := WaitForNamespaceDelete(ctx, ctx.Env().C1, name); err != nil {
+		return err
+	}
+
+	return WaitForNamespaceDelete(ctx, ctx.Env().C2, name)
 }
 
 // waitForResourceDelete waits until a resource is deleted or deadline is reached
 func waitForResourceDelete(ctx types.Context, cluster types.Cluster, obj client.Object) error {
 	log := ctx.Logger()
 	kind := getKind(obj)
-	key := k8stypes.NamespacedName{
-		Name:      obj.GetName(),
-		Namespace: obj.GetNamespace(),
-	}
 	resourceName := logName(obj)
+	start := time.Now()
 
 	log.Debugf("Waiting until %s %q is deleted in cluster %q", kind, resourceName, cluster.Name)
 
 	for {
-		if err := cluster.Client.Get(ctx.Context(), key, obj); err != nil {
+		if err := cluster.Client.Get(ctx.Context(), client.ObjectKeyFromObject(obj), obj); err != nil {
 			if !k8serrors.IsNotFound(err) {
 				return err
 			}
 
-			log.Debugf("%s %q deleted in cluster %q", kind, resourceName, cluster.Name)
+			elapsed := time.Since(start)
+			log.Debugf("%s %q deleted in cluster %q in %.3f seconds", kind, resourceName, cluster.Name, elapsed.Seconds())
 
 			return nil
 		}

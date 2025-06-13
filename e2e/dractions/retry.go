@@ -5,6 +5,7 @@ package dractions
 
 import (
 	"fmt"
+	"time"
 
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -17,6 +18,7 @@ import (
 func waitDRPCReady(ctx types.TestContext, namespace string, drpcName string) error {
 	log := ctx.Logger()
 	hub := ctx.Env().Hub
+	start := time.Now()
 
 	log.Debugf("Waiting until drpc \"%s/%s\" is ready in cluster %q", namespace, drpcName, hub.Name)
 
@@ -38,7 +40,9 @@ func waitDRPCReady(ctx types.TestContext, namespace string, drpcName string) err
 			peerReady &&
 			progressionCompleted &&
 			drpc.Status.LastGroupSyncTime != nil {
-			log.Debugf("drpc \"%s/%s\" is ready in cluster %q", namespace, drpcName, hub.Name)
+			elapsed := time.Since(start)
+			log.Debugf("drpc \"%s/%s\" is ready in cluster %q in %.3f seconds",
+				namespace, drpcName, hub.Name, elapsed.Seconds())
 
 			return nil
 		}
@@ -60,6 +64,7 @@ func conditionMet(conditions []metav1.Condition, conditionType string) bool {
 func waitDRPCPhase(ctx types.TestContext, namespace, name string, phase ramen.DRState) error {
 	log := ctx.Logger()
 	hub := ctx.Env().Hub
+	start := time.Now()
 
 	log.Debugf("Waiting until drpc \"%s/%s\" reach phase %q in cluster %q", namespace, name, phase, hub.Name)
 
@@ -71,7 +76,9 @@ func waitDRPCPhase(ctx types.TestContext, namespace, name string, phase ramen.DR
 
 		currentPhase := drpc.Status.Phase
 		if currentPhase == phase {
-			log.Debugf("drpc \"%s/%s\" phase is %q in cluster %q", namespace, name, phase, hub.Name)
+			elapsed := time.Since(start)
+			log.Debugf("drpc \"%s/%s\" phase is %q in cluster %q in %.3f seconds",
+				namespace, name, phase, hub.Name, elapsed.Seconds())
 
 			return nil
 		}
@@ -86,20 +93,20 @@ func getTargetCluster(
 	ctx types.TestContext,
 	cluster types.Cluster,
 	drPolicyName, currentCluster string,
-) (string, error) {
+) (types.Cluster, error) {
 	drpolicy, err := util.GetDRPolicy(ctx, cluster, drPolicyName)
 	if err != nil {
-		return "", err
+		return types.Cluster{}, err
 	}
 
-	var targetCluster string
+	var targetClusterName string
 	if currentCluster == drpolicy.Spec.DRClusters[0] {
-		targetCluster = drpolicy.Spec.DRClusters[1]
+		targetClusterName = drpolicy.Spec.DRClusters[1]
 	} else {
-		targetCluster = drpolicy.Spec.DRClusters[0]
+		targetClusterName = drpolicy.Spec.DRClusters[0]
 	}
 
-	return targetCluster, nil
+	return ctx.Env().GetCluster(targetClusterName)
 }
 
 // nolint:unparam
@@ -110,6 +117,7 @@ func waitDRPCProgression(
 ) error {
 	log := ctx.Logger()
 	hub := ctx.Env().Hub
+	start := time.Now()
 
 	log.Debugf("Waiting until drpc \"%s/%s\" reach progression %q in cluster %q",
 		namespace, name, progression, hub.Name)
@@ -122,7 +130,9 @@ func waitDRPCProgression(
 
 		currentProgression := drpc.Status.Progression
 		if currentProgression == progression {
-			log.Debugf("drpc \"%s/%s\" progression is %q in cluster %q", namespace, name, progression, hub.Name)
+			elapsed := time.Since(start)
+			log.Debugf("drpc \"%s/%s\" progression is %q in cluster %q in %.3f seconds",
+				namespace, name, progression, hub.Name, elapsed.Seconds())
 
 			return nil
 		}
