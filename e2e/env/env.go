@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 
 	"go.uber.org/zap"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/kubectl/pkg/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -23,6 +22,7 @@ import (
 
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
 	argocdv1alpha1hack "github.com/ramendr/ramen/e2e/argocd"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	subscription "open-cluster-management.io/multicloud-operators-subscription/pkg/apis"
 	placementrule "open-cluster-management.io/multicloud-operators-subscription/pkg/apis/apps/placementrule/v1"
 
@@ -30,35 +30,40 @@ import (
 	"github.com/ramendr/ramen/e2e/types"
 )
 
-func addToScheme(scheme *runtime.Scheme) error {
-	if err := ocmv1b1.AddToScheme(scheme); err != nil {
-		return err
-	}
-
-	if err := ocmv1b2.AddToScheme(scheme); err != nil {
-		return err
-	}
-
-	if err := ocmv1a1.AddToScheme(scheme); err != nil {
-		return err
-	}
-
-	if err := placementrule.AddToScheme(scheme); err != nil {
-		return err
-	}
-
-	if err := subscription.AddToScheme(scheme); err != nil {
-		return err
-	}
-
-	if err := argocdv1alpha1hack.AddToScheme(scheme); err != nil {
-		return err
-	}
-
-	return ramen.AddToScheme(scheme)
+func init() {
+	utilruntime.Must(ocmv1b1.AddToScheme(scheme.Scheme))
+	utilruntime.Must(ocmv1b2.AddToScheme(scheme.Scheme))
+	utilruntime.Must(ocmv1a1.AddToScheme(scheme.Scheme))
+	utilruntime.Must(placementrule.AddToScheme(scheme.Scheme))
+	utilruntime.Must(subscription.AddToScheme(scheme.Scheme))
+	utilruntime.Must(argocdv1alpha1hack.AddToScheme(scheme.Scheme))
+	utilruntime.Must(ramen.AddToScheme(scheme.Scheme))
 }
 
-func setupClient(kubeconfigPath string) (client.Client, error) {
+func New(ctx context.Context, clusters map[string]config.Cluster, log *zap.SugaredLogger) (*types.Env, error) {
+	var err error
+
+	env := &types.Env{}
+
+	env.Hub, err = newCluster(ctx, "hub", clusters["hub"], log)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create env: %w", err)
+	}
+
+	env.C1, err = newCluster(ctx, "c1", clusters["c1"], log)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create env: %w", err)
+	}
+
+	env.C2, err = newCluster(ctx, "c2", clusters["c2"], log)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create env: %w", err)
+	}
+
+	return env, nil
+}
+
+func newClient(kubeconfigPath string) (client.Client, error) {
 	var err error
 
 	if kubeconfigPath == "" {
@@ -75,10 +80,6 @@ func setupClient(kubeconfigPath string) (client.Client, error) {
 		return nil, fmt.Errorf("failed to build config from kubeconfig (%s): %w", kubeconfigPath, err)
 	}
 
-	if err := addToScheme(scheme.Scheme); err != nil {
-		return nil, err
-	}
-
 	client, err := client.New(cfg, client.Options{Scheme: scheme.Scheme})
 	if err != nil {
 		return nil, fmt.Errorf("failed to build controller client from kubeconfig (%s): %w", kubeconfigPath, err)
@@ -87,20 +88,21 @@ func setupClient(kubeconfigPath string) (client.Client, error) {
 	return client, nil
 }
 
-func setupCluster(
+func newCluster(
 	ctx context.Context,
-	cluster *types.Cluster,
 	key string,
 	clusterConfig config.Cluster,
 	log *zap.SugaredLogger,
-) error {
-	client, err := setupClient(clusterConfig.Kubeconfig)
+) (*types.Cluster, error) {
+	client, err := newClient(clusterConfig.Kubeconfig)
 	if err != nil {
-		return fmt.Errorf("failed to setup cluster %q: %w", key, err)
+		return nil, fmt.Errorf("failed to create cluster %q: %w", key, err)
 	}
 
-	cluster.Client = client
-	cluster.Kubeconfig = clusterConfig.Kubeconfig
+	cluster := &types.Cluster{
+		Client:     client,
+		Kubeconfig: clusterConfig.Kubeconfig,
+	}
 
 	switch key {
 	case "hub":
@@ -111,7 +113,7 @@ func setupCluster(
 		// For c1 and c2 clusters, get the cluster name from ClusterClaim
 		cluster.Name, err = getClusterClaimName(ctx, cluster)
 		if err != nil {
-			return fmt.Errorf("failed to get ClusterClaim name for the %q managed cluster: %w", key, err)
+			return nil, fmt.Errorf("failed to get ClusterClaim name for the %q managed cluster: %w", key, err)
 		}
 
 		log.Infof("Detected %q managed cluster name: %q", key, cluster.Name)
@@ -120,7 +122,7 @@ func setupCluster(
 		panic(fmt.Sprintf("Unexpected cluster key: %q, expected \"hub\", \"c1\", or \"c2\"", key))
 	}
 
-	return nil
+	return cluster, nil
 }
 
 // getClusterClaimName gets the cluster name using clusterclaims/name resource.
@@ -135,22 +137,4 @@ func getClusterClaimName(ctx context.Context, cluster *types.Cluster) (string, e
 	}
 
 	return clusterClaim.Spec.Value, nil
-}
-
-func New(ctx context.Context, clusters map[string]config.Cluster, log *zap.SugaredLogger) (*types.Env, error) {
-	env := &types.Env{}
-
-	if err := setupCluster(ctx, &env.Hub, "hub", clusters["hub"], log); err != nil {
-		return nil, fmt.Errorf("failed to create env: %w", err)
-	}
-
-	if err := setupCluster(ctx, &env.C1, "c1", clusters["c1"], log); err != nil {
-		return nil, fmt.Errorf("failed to create env: %w", err)
-	}
-
-	if err := setupCluster(ctx, &env.C2, "c2", clusters["c2"], log); err != nil {
-		return nil, fmt.Errorf("failed to create env: %w", err)
-	}
-
-	return env, nil
 }
