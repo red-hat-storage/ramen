@@ -77,14 +77,14 @@ environment.
 1. Install the `velero` tool
 
    ```
-   curl -L -o velero.tar.gz https://github.com/vmware-tanzu/velero/releases/download/v1.14.0/velero-v1.14.0-linux-amd64.tar.gz
-   tar xf velero.tar.gz --strip 1 velero-v1.14.0-linux-amd64/velero
+   curl -L -o velero.tar.gz https://github.com/vmware-tanzu/velero/releases/download/v1.16.1/velero-v1.16.1-linux-amd64.tar.gz
+   tar xf velero.tar.gz --strip 1 velero-v1.16.1-linux-amd64/velero
    sudo install velero /usr/local/bin
    rm velero.tar.gz velero
    ```
 
    For more info see
-   [Velero Basic Install](https://velero.io/docs/v1.14/basic-install/)
+   [Velero Basic Install](https://velero.io/docs/v1.16/basic-install/)
 
 1. Install `helm` tool - on Fedora you can use:
 
@@ -98,7 +98,7 @@ environment.
 1. Install the `virtctl` tool
 
    ```
-   curl -L -o virtctl https://github.com/kubevirt/kubevirt/releases/download/v1.3.0/virtctl-v1.3.0-linux-amd64
+   curl -L -o virtctl https://github.com/kubevirt/kubevirt/releases/download/v1.5.2/virtctl-v1.5.2-linux-amd64
    sudo install virtctl /usr/local/bin
    rm virtctl
    ```
@@ -148,7 +148,7 @@ environment.
    ```
 
    kubectl-gather version 0.6.0 or later is required. Tested with
-   version 0.7.0.
+   version 0.8.0.
    For more info see [kubectl-gather](https://github.com/nirs/kubectl-gather)
 
 ## Setup on macOS
@@ -207,7 +207,7 @@ environment.
    ```
 
    kubectl-gather version 0.6.0 or later is required. Tested with
-   version 0.7.0.
+   version 0.8.0.
    For more info see [kubectl-gather](https://github.com/nirs/kubectl-gather)
 
 1. Install `socket_vmnet`
