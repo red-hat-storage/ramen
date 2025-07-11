@@ -101,11 +101,6 @@ func EnableProtection(ctx types.TestContext) error {
 // remove DRPC
 // update placement annotation
 func DisableProtection(ctx types.TestContext) error {
-	d := ctx.Deployer()
-	if d.IsDiscovered() {
-		return DisableProtectionDiscoveredApps(ctx)
-	}
-
 	name := ctx.Name()
 	managementNamespace := ctx.ManagementNamespace()
 	appNamespace := ctx.AppNamespace()
@@ -125,13 +120,11 @@ func DisableProtection(ctx types.TestContext) error {
 			appNamespace, ctx.Workload().GetAppName(), cluster.Name)
 	}
 
-	drpcName := name
-
-	if err := deleteDRPC(ctx, managementNamespace, drpcName); err != nil {
+	if err := deleteProtectionResources(ctx); err != nil {
 		return err
 	}
 
-	if err := util.WaitForDRPCDelete(ctx, ctx.Env().Hub, drpcName, managementNamespace); err != nil {
+	if err := waitForProtectionResourcesDelete(ctx); err != nil {
 		return err
 	}
 
@@ -202,6 +195,44 @@ func Relocate(ctx types.TestContext) error {
 	return nil
 }
 
+// Purge deletes the workload's protection resources, then the workload,
+// and waits for all related resources to be completely deleted.
+func Purge(ctx types.TestContext) error {
+	log := ctx.Logger()
+
+	cluster, err := util.GetCurrentCluster(ctx, ctx.ManagementNamespace(), ctx.Name())
+	if err != nil {
+		if !k8serrors.IsNotFound(err) {
+			return err
+		}
+
+		log.Infof("Purging workload \"%s/%s\"", ctx.AppNamespace(), ctx.Workload().GetAppName())
+	} else {
+		log.Infof("Purging workload \"%s/%s\" in cluster %q",
+			ctx.AppNamespace(), ctx.Workload().GetAppName(), cluster.Name)
+	}
+
+	if err := deleteProtectionResources(ctx); err != nil {
+		return err
+	}
+
+	if err := ctx.Deployer().DeleteResources(ctx); err != nil {
+		return err
+	}
+
+	if err := waitForProtectionResourcesDelete(ctx); err != nil {
+		return err
+	}
+
+	if err := ctx.Deployer().WaitForResourcesDelete(ctx); err != nil {
+		return err
+	}
+
+	log.Info("Workload purged")
+
+	return nil
+}
+
 func failoverRelocate(
 	ctx types.TestContext,
 	action ramen.DRAction,
@@ -266,4 +297,36 @@ func waitAndUpdateDRPC(
 
 		return nil
 	})
+}
+
+// deleteProtectionResources deletes protection-related resources like the DRPC.
+// For discovered deployers, it also deletes the associated Placement and ManagedClusterSetBinding.
+func deleteProtectionResources(ctx types.TestContext) error {
+	if err := deleteDRPC(ctx, ctx.ManagementNamespace(), ctx.Name()); err != nil {
+		return err
+	}
+
+	if ctx.Deployer().IsDiscovered() {
+		if err := deployers.DeletePlacement(ctx, ctx.Name(), ctx.ManagementNamespace()); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// waitForProtectionResourcesDelete waits for protection-related resources to be deleted.
+// This includes the DRPC, and for discovered deployers, the Placement and ManagedClusterSetBinding.
+func waitForProtectionResourcesDelete(ctx types.TestContext) error {
+	if err := util.WaitForDRPCDelete(ctx, ctx.Env().Hub, ctx.Name(), ctx.ManagementNamespace()); err != nil {
+		return err
+	}
+
+	if ctx.Deployer().IsDiscovered() {
+		if err := util.WaitForPlacementDelete(ctx, ctx.Env().Hub, ctx.Name(), ctx.ManagementNamespace()); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
