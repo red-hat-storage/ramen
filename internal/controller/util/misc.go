@@ -36,7 +36,8 @@ const (
 
 	CreatedByRamenLabel = "ramendr.openshift.io/created-by-ramen"
 
-	VGSCRDName = "volumegroupsnapshots.groupsnapshot.storage.k8s.io"
+	VGSCRDPrivateName = "volumegroupsnapshots.groupsnapshot.storage.openshift.io"
+	VGSCRDName        = "volumegroupsnapshots.groupsnapshot.storage.k8s.io"
 )
 
 type ResourceUpdater struct {
