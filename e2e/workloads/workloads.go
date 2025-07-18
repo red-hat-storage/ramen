@@ -5,31 +5,37 @@ package workloads
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/ramendr/ramen/e2e/config"
 	"github.com/ramendr/ramen/e2e/types"
 )
 
-type factory func(revision string, pvcSpec config.PVCSpec) types.Workload
+// factoryFunc is the new() function type for workloads
+type factoryFunc func(revision string, pvcSpec config.PVCSpec) types.Workload
 
-var registry = map[string]factory{
-	deploymentName: NewDeployment,
-}
+var registry = map[string]factoryFunc{}
 
 func New(name, branch string, pvcSpec config.PVCSpec) (types.Workload, error) {
-	fac := registry[name]
-	if fac == nil {
-		return nil, fmt.Errorf("unknown deployment: %q (choose from %q)", name, AvailableNames())
+	factory := registry[name]
+	if factory == nil {
+		return nil, fmt.Errorf("unknown workload: %q (choose from %q)", name, AvailableNames())
 	}
 
-	return fac(branch, pvcSpec), nil
+	return factory(branch, pvcSpec), nil
 }
 
 func AvailableNames() []string {
-	keys := make([]string, 0, len(registry))
-	for k := range registry {
-		keys = append(keys, k)
+	return slices.Collect(maps.Keys(registry))
+}
+
+// register needs to be called by every workload in the init() function to
+// register itself with the workload registry.
+func register(workloadType string, f factoryFunc) {
+	if _, exists := registry[workloadType]; exists {
+		panic(fmt.Sprintf("workload %q already registered", workloadType))
 	}
 
-	return keys
+	registry[workloadType] = f
 }

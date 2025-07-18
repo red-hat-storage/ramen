@@ -14,6 +14,10 @@ import (
 
 type DiscoveredApp struct{}
 
+func NewDiscoveredApp() types.Deployer {
+	return &DiscoveredApp{}
+}
+
 func (d DiscoveredApp) GetName() string {
 	return "disapp"
 }
@@ -193,4 +197,8 @@ func chooseDeployCluster(ctx types.TestContext) (*types.Cluster, error) {
 		return nil, fmt.Errorf("application \"%s/%s\" found on multiple clusters: %+v",
 			ctx.AppNamespace(), ctx.Workload().GetAppName(), statuses)
 	}
+}
+
+func init() {
+	register("disapp", NewDiscoveredApp)
 }
