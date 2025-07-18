@@ -77,9 +77,7 @@ func evaluateBooleanExpression(expression string, jsonData interface{}) (bool, e
 	}
 
 	if operands[0].Kind() == reflect.Invalid || operands[1].Kind() == reflect.Invalid {
-		return false, fmt.Errorf("check expression to evaluate, one of the jsonpath is either incorrect"+
-			" or value is not updated, operand types are %v and %v",
-			operands[0].Kind(), operands[1].Kind())
+		return false, fmt.Errorf("either resource is not found or status is not initialized")
 	}
 
 	return compare(operands[0], operands[1], op)
