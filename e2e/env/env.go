@@ -13,6 +13,7 @@ import (
 	"k8s.io/kubectl/pkg/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	virtv1 "kubevirt.io/api/core/v1"
 	// Placement
 	ocmv1b1 "open-cluster-management.io/api/cluster/v1beta1"
 	// ManagedClusterSetBinding
@@ -22,13 +23,13 @@ import (
 
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
 	argocdv1alpha1hack "github.com/ramendr/ramen/e2e/argocd"
+	recipe "github.com/ramendr/recipe/api/v1alpha1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	subscription "open-cluster-management.io/multicloud-operators-subscription/pkg/apis"
 	placementrule "open-cluster-management.io/multicloud-operators-subscription/pkg/apis/apps/placementrule/v1"
 
 	"github.com/ramendr/ramen/e2e/config"
 	"github.com/ramendr/ramen/e2e/types"
-	recipe "github.com/ramendr/recipe/api/v1alpha1"
 )
 
 func init() {
@@ -40,6 +41,7 @@ func init() {
 	utilruntime.Must(argocdv1alpha1hack.AddToScheme(scheme.Scheme))
 	utilruntime.Must(ramen.AddToScheme(scheme.Scheme))
 	utilruntime.Must(recipe.AddToScheme(scheme.Scheme))
+	utilruntime.Must(virtv1.AddToScheme(scheme.Scheme))
 }
 
 func New(ctx context.Context, clusters map[string]config.Cluster, log *zap.SugaredLogger) (*types.Env, error) {
