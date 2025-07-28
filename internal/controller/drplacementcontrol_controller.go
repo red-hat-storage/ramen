@@ -1518,7 +1518,6 @@ func setConflictStatusCondition(existingConditions *[]metav1.Condition,
 	// TODO: Why not update lastTranTime if the above change?
 
 	if existingCondition.ObservedGeneration != newCondition.ObservedGeneration {
-		existingCondition.ObservedGeneration = newCondition.ObservedGeneration
 		existingCondition.LastTransitionTime = metav1.NewTime(time.Now())
 	}
 
