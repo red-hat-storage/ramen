@@ -530,6 +530,9 @@ const (
 	// StorageClass label
 	StorageIDLabel = "ramendr.openshift.io/storageid"
 
+	// StorageClass offloaded label
+	StorageOffloadedLabel = "ramendr.openshift.io/offloaded"
+
 	// Consistency group label
 	ConsistencyGroupLabel = "ramendr.openshift.io/consistency-group"
 
@@ -702,19 +705,27 @@ func (v *VRGInstance) updatePVCList() error {
 	}
 
 	if v.instance.Spec.Async == nil {
-		err := v.validateSyncPVCs(pvcList)
-		if err != nil {
-			return err
-		}
-
-		v.volRepPVCs = make([]corev1.PersistentVolumeClaim, len(pvcList.Items))
-		total := copy(v.volRepPVCs, pvcList.Items)
-
-		v.log.Info("Found PersistentVolumeClaims", "count", total)
-
-		return nil
+		return v.updateSyncPVCs(pvcList)
 	}
 
+	return v.updateAsyncPVCs(pvcList)
+}
+
+func (v *VRGInstance) updateSyncPVCs(pvcList *corev1.PersistentVolumeClaimList) error {
+	err := v.validateSyncPVCs(pvcList)
+	if err != nil {
+		return err
+	}
+
+	v.volRepPVCs = make([]corev1.PersistentVolumeClaim, len(pvcList.Items))
+	total := copy(v.volRepPVCs, pvcList.Items)
+
+	v.log.Info("Found PersistentVolumeClaims", "count", total)
+
+	return nil
+}
+
+func (v *VRGInstance) updateAsyncPVCs(pvcList *corev1.PersistentVolumeClaimList) error {
 	if err := v.updateReplicationClassList(); err != nil {
 		return err
 	}
@@ -727,8 +738,123 @@ func (v *VRGInstance) updatePVCList() error {
 		return nil
 	}
 
+	offloaded, err := v.processOffloadedPVCs(pvcList)
+	if err != nil {
+		return err
+	}
+
+	if offloaded {
+		return nil
+	}
+
 	// Separate PVCs targeted for VolRep from PVCs targeted for VolSync
 	return v.separateAsyncPVCs(pvcList)
+}
+
+func isOffloadedByPeerClass(scName, sID string, peerClass *ramendrv1alpha1.PeerClass) bool {
+	if scName != peerClass.StorageClassName {
+		return false
+	}
+
+	if !slices.Contains(peerClass.StorageID, sID) {
+		return false
+	}
+
+	if !peerClass.Offloaded {
+		return false
+	}
+
+	return true
+}
+
+func (v *VRGInstance) isOffloadedByPeerClasses(sc *storagev1.StorageClass) (bool, error) {
+	if !util.HasLabel(sc, StorageIDLabel) {
+		return false, fmt.Errorf("missing %s label in StorageClass (%s)", StorageIDLabel, sc.GetName())
+	}
+
+	sID := sc.GetLabels()[StorageIDLabel]
+
+	for idx := range v.instance.Spec.Async.PeerClasses {
+		if isOffloadedByPeerClass(sc.GetName(), sID, &v.instance.Spec.Async.PeerClasses[idx]) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// processOffloadedPVCs ensures either all PVCs for the VRG are offloaded, or none are. IF all are offloaded then
+// the VR PVC list is updated with the PVC list
+//
+//nolint:gocognit,cyclop,funlen
+func (v *VRGInstance) processOffloadedPVCs(pvcList *corev1.PersistentVolumeClaimList) (bool, error) {
+	if len(v.instance.Spec.Async.PeerClasses) == 0 {
+		return false, nil
+	}
+
+	offloaded := false
+
+	for idx := range pvcList.Items {
+		pvc := &pvcList.Items[idx]
+
+		storageClass, err := v.validateAndGetStorageClass(pvc.Spec.StorageClassName, pvc)
+		if err != nil {
+			return false, err
+		}
+
+		pvcOffloadedBySC := util.HasLabel(storageClass, StorageOffloadedLabel)
+
+		pvcOffloadedByPeer, err := v.isOffloadedByPeerClasses(storageClass)
+		if err != nil {
+			return false, err
+		}
+
+		if pvcOffloadedByPeer != pvcOffloadedBySC {
+			return false, fmt.Errorf(
+				"mismatched peerClass offload support (%t) with current StorageClass "+
+					"(%s) offload support (%t) for PVC (%s/%s)",
+				pvcOffloadedByPeer,
+				*pvc.Spec.StorageClassName,
+				pvcOffloadedBySC,
+				pvc.GetName(),
+				pvc.GetNamespace(),
+			)
+		}
+
+		if idx == 0 {
+			if pvcOffloadedBySC {
+				offloaded = true
+			}
+
+			continue
+		}
+
+		if pvcOffloadedBySC == offloaded {
+			continue
+		}
+
+		return false, fmt.Errorf("invalid list of PVCs to protect, found a mix of offloaded and non-offloaded PVCs")
+	}
+
+	if !offloaded {
+		return offloaded, nil
+	}
+
+	for idx := range pvcList.Items {
+		pvc := &pvcList.Items[idx]
+
+		if err := v.addVolRepConsistencyGroupLabel(pvc); err != nil {
+			return offloaded, fmt.Errorf("failed to label offloaded PVC %s/%s for consistency group (%w)",
+				pvc.GetNamespace(), pvc.GetName(), err)
+		}
+	}
+
+	v.volRepPVCs = make([]corev1.PersistentVolumeClaim, len(pvcList.Items))
+	copy(v.volRepPVCs, pvcList.Items)
+
+	v.log.Info(fmt.Sprintf("Found %d PVCs targeted for offloaded protection", len(v.volRepPVCs)))
+
+	return offloaded, nil
 }
 
 // addVolRepConsistencyGroupLabel ensures that the given PVC is labeled as part of a consistency group.
@@ -1936,7 +2062,9 @@ func isVRGReasonError(condition *metav1.Condition) bool {
 	return condition.Reason == VRGConditionReasonError ||
 		condition.Reason == VRGConditionReasonErrorUnknown ||
 		condition.Reason == VRGConditionReasonUploadError ||
-		condition.Reason == VRGConditionReasonClusterDataAnnotationFailed
+		condition.Reason == VRGConditionReasonClusterDataAnnotationFailed ||
+		condition.Reason == VRGConditionReasonDataConflictPrimary ||
+		condition.Reason == VRGConditionReasonDataConflictSecondary
 }
 
 func (v *VRGInstance) s3StoreAccessorsGet() {
@@ -2155,6 +2283,8 @@ func (v *VRGInstance) CheckForVMConflictOnPrimary() error {
 		labelSelector,
 		vmNamespace,
 	); err != nil {
+		v.log.Error(err, "Failed to list VMs by label-selector on primary cluster")
+
 		return err
 	}
 
@@ -2162,7 +2292,12 @@ func (v *VRGInstance) CheckForVMConflictOnPrimary() error {
 	protectedVMsSet := sets.NewString(vmList...)
 
 	if !(foundVMsSet.Equal(protectedVMsSet)) {
-		return fmt.Errorf("protected  VMs list is not matching the VMs matching label selector")
+		v.log.Info(fmt.Sprintf("VMs found matching label selector are : %v"+
+			" and the list of VMs being protected are: %v "+
+			". This may impact failover or recovery operations.", foundVMsSet, protectedVMsSet))
+
+		return fmt.Errorf("mismatch between VMs in the protection spec and those matched by the " +
+			"label selector, potentially affecting failover or recovery")
 	}
 
 	return nil
@@ -2188,7 +2323,8 @@ func (v *VRGInstance) CheckForVMConflictOnSecondary() error {
 			return err
 		}
 
-		return fmt.Errorf("conflicting VMs found on secondary cluster")
+		return fmt.Errorf("protected VMs on the primary cluster match labeled VMs on the secondary site," +
+			" potentially impacting failover or recovery")
 	}
 
 	return nil
@@ -2207,7 +2343,10 @@ func (v *VRGInstance) CheckForVMNameConflictOnSecondary(vmNamespaceList, vmList 
 		return nil
 	}
 
-	return fmt.Errorf("found conflicting VMs[%v] on secondary", foundVMs)
+	v.log.Info(fmt.Sprintf("found conflicting VM[%v] on secondary", foundVMs))
+
+	return fmt.Errorf("protected VMs on the primary cluster share names with VMs on " +
+		"the secondary site, which may impact failover or recovery")
 }
 
 func (v *VRGInstance) aggregateVRGNoClusterDataConflictCondition() *metav1.Condition {
@@ -2215,8 +2354,10 @@ func (v *VRGInstance) aggregateVRGNoClusterDataConflictCondition() *metav1.Condi
 
 	if v.isVMRecipeProtection() {
 		if err := v.validateVMsForStandaloneProtection(); err != nil {
-			msg = fmt.Sprintf("Conflicting VMs validation failed for VM protection on %s cluster",
-				v.instance.Spec.ReplicationState)
+			v.log.Error(err, "this discrepancy indicates that the current label selector does not "+
+				"accurately reflect the intended set of protected VMs")
+			msg = fmt.Sprintf("VM protection validation failed on the %s cluster due to a %v",
+				v.instance.Spec.ReplicationState, err)
 
 			return v.clusterDataConflict(msg, metav1.ConditionFalse)
 		}
