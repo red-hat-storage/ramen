@@ -182,6 +182,11 @@ func (v *VRGInstance) uploadVGRandVGRCtoS3Stores(vrNamespacedName types.Namespac
 		return fmt.Errorf("failed to get VGR (%w)", err)
 	}
 
+	if vgr.Spec.External {
+		// do not upload
+		return nil
+	}
+
 	if v.isVGRandVGRCArchivedAlready(vgr, log) {
 		msg := fmt.Sprintf("VGR %s cluster data already protected", vgr.Name)
 		v.log.Info(msg)
@@ -616,7 +621,7 @@ func (v *VRGInstance) reconcileMissingVGR(vrNamespacedName types.NamespacedName,
 func (v *VRGInstance) isCGEnabled(pvc *corev1.PersistentVolumeClaim) (string, bool) {
 	cg, ok := pvc.GetLabels()[ConsistencyGroupLabel]
 
-	return cg, ok && rmnutil.IsCGEnabled(v.instance.GetAnnotations())
+	return cg, ok && rmnutil.IsCGEnabledForVolRep(v.ctx, v.reconciler.APIReader)
 }
 
 func (v *VRGInstance) processVGRAsPrimary(vrNamespacedName types.NamespacedName,
@@ -746,19 +751,34 @@ func (v *VRGInstance) updateVGR(pvcs []*corev1.PersistentVolumeClaim,
 }
 
 // createVGR creates a VolumeGroupReplication CR
+//
+//nolint:funlen
 func (v *VRGInstance) createVGR(vrNamespacedName types.NamespacedName,
 	pvcs []*corev1.PersistentVolumeClaim, state volrep.ReplicationState,
 ) error {
-	volumeReplicationClass, err := v.selectVolumeReplicationClass(pvcs[0], false)
+	storageClass, err := v.validateAndGetStorageClass(pvcs[0].Spec.StorageClassName, pvcs[0])
 	if err != nil {
-		return fmt.Errorf("failed to find the appropriate VolumeReplicationClass (%s) %w",
-			v.instance.Name, err)
+		return err
 	}
+
+	offloaded := rmnutil.HasLabel(storageClass, StorageOffloadedLabel)
 
 	volumeGroupReplicationClass, err := v.selectVolumeReplicationClass(pvcs[0], true)
 	if err != nil {
 		return fmt.Errorf("failed to find the appropriate VolumeGroupReplicationClass (%s) %w",
 			v.instance.Name, err)
+	}
+
+	volumeReplicationClassName := ""
+
+	if !offloaded {
+		volumeReplicationClass, err := v.selectVolumeReplicationClass(pvcs[0], false)
+		if err != nil {
+			return fmt.Errorf("failed to find the appropriate VolumeReplicationClass (%s) %w",
+				v.instance.Name, err)
+		}
+
+		volumeReplicationClassName = volumeReplicationClass.GetName()
 	}
 
 	cg, ok := pvcs[0].GetLabels()[ConsistencyGroupLabel]
@@ -777,8 +797,9 @@ func (v *VRGInstance) createVGR(vrNamespacedName types.NamespacedName,
 		},
 		Spec: volrep.VolumeGroupReplicationSpec{
 			ReplicationState:                state,
-			VolumeReplicationClassName:      volumeReplicationClass.GetName(),
+			VolumeReplicationClassName:      volumeReplicationClassName,
 			VolumeGroupReplicationClassName: volumeGroupReplicationClass.GetName(),
+			External:                        offloaded,
 			Source: volrep.VolumeGroupReplicationSource{
 				Selector: selector,
 			},
@@ -854,7 +875,7 @@ func (v *VRGInstance) addArchivedAnnotationForVGRandVGRC(vgr *volrep.VolumeGroup
 }
 
 func (v *VRGInstance) restoreVGRsAndVGRCsForVolRep(result *ctrl.Result) error {
-	if !rmnutil.IsCGEnabled(v.instance.GetAnnotations()) {
+	if !rmnutil.IsCGEnabledForVolRep(v.ctx, v.reconciler.APIReader) {
 		return nil
 	}
 

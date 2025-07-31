@@ -81,7 +81,7 @@ func (d *DRPCInstance) startProcessing() bool {
 	done, processingErr := d.processPlacement()
 
 	if d.shouldUpdateStatus() || d.statusUpdateTimeElapsed() {
-		if err := d.reconciler.updateDRPCStatus(d.ctx, d.instance, d.userPlacement, d.log); err != nil {
+		if err := d.reconciler.updateDRPCStatus(d.ctx, d.instance, d.userPlacement, d.log, d.vrgs); err != nil {
 			errMsg := fmt.Sprintf("error from update DRPC status: %v", err)
 			if processingErr != nil {
 				errMsg += fmt.Sprintf(", error from process placement: %v", processingErr)
@@ -350,9 +350,9 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 	}
 
 	failoverCluster := d.instance.Spec.FailoverCluster
-	if !d.isValidFailoverTarget(failoverCluster) {
-		err := fmt.Errorf("unable to start failover, spec.FailoverCluster (%s) is not a valid Secondary target",
-			failoverCluster)
+	if ok, checkerr := d.isValidFailoverTarget(failoverCluster); !ok {
+		err := fmt.Errorf("unable to start failover, spec.FailoverCluster (%s) is not a valid Secondary target: %w",
+			failoverCluster, checkerr)
 		addOrUpdateCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
 			d.getConditionStatusForTypeAvailable(), string(d.instance.Status.Phase), err.Error())
 
@@ -397,7 +397,7 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 
 // isValidFailoverTarget determines if the passed in cluster is a valid target to failover to. A valid failover target
 // may already be Primary
-func (d *DRPCInstance) isValidFailoverTarget(cluster string) bool {
+func (d *DRPCInstance) isValidFailoverTarget(cluster string) (bool, error) {
 	annotations := make(map[string]string)
 	annotations[DRPCNameAnnotation] = d.instance.GetName()
 	annotations[DRPCNamespaceAnnotation] = d.instance.GetNamespace()
@@ -407,22 +407,23 @@ func (d *DRPCInstance) isValidFailoverTarget(cluster string) bool {
 		d.log.Info("Failed to get VRG from managed cluster", "name", d.instance.Name, "namespace", d.vrgNamespace,
 			"cluster", cluster, "annotations", annotations, "error", err)
 
-		return false
+		return false, fmt.Errorf("failed to get VRG from managed cluster %s: %w", cluster, err)
 	}
 
 	if isVRGPrimary(vrg) {
 		// VRG is Primary, valid target with possible failover in progress
-		return true
+		return true, nil
 	}
 
 	if vrg.Status.State != rmn.SecondaryState || vrg.Status.ObservedGeneration != vrg.Generation {
 		d.log.Info(fmt.Sprintf("VRG on %s has not transitioned to secondary yet. Spec-State/Status-State %s/%s",
 			cluster, vrg.Spec.ReplicationState, vrg.Status.State))
 
-		return false
+		return false, fmt.Errorf("VRG on %s has not transitioned to secondary yet. Spec-State/Status-State %s/%s",
+			cluster, vrg.Spec.ReplicationState, vrg.Status.State)
 	}
 
-	return true
+	return true, nil
 }
 
 func (d *DRPCInstance) checkClusterFenced(cluster string, drClusters []rmn.DRCluster) (bool, error) {
@@ -1604,8 +1605,9 @@ func equalClusterIDSlices(a, b []string) bool {
 }
 
 // updatePeerClass conditionally updates an existing peerClass in to, with values from. If existing peerClass claims
-// a replicationID then the from should also claim a replicationID, else both should not. This ensures that a peerClass
-// is updated with latest storage/replication IDs but only if the underlying replication scheme remains unchanged.
+// a replicationID then the from should also claim a replicationID, else both should not.  Similarly existing peerClass
+// offloaded property should be the same as from. This ensures that a peerClass is updated with latest
+// storage/replication IDs but only if the underlying replication scheme remains unchanged.
 // If DRPC is annotated with CG values, then grouping is also updated to true.
 
 //nolint:gocognit,cyclop
@@ -1614,6 +1616,10 @@ func updatePeerClass(log logr.Logger, to []rmn.PeerClass, from rmn.PeerClass, sc
 		if (to[toIdx].StorageClassName != scName) ||
 			(!equalClusterIDSlices(to[toIdx].ClusterIDs, from.ClusterIDs)) {
 			continue
+		}
+
+		if to[toIdx].Offloaded != from.Offloaded {
+			break
 		}
 
 		if to[toIdx].ReplicationID == "" && from.ReplicationID == "" && to[toIdx].Grouping == from.Grouping {
@@ -1636,7 +1642,7 @@ func updatePeerClass(log logr.Logger, to []rmn.PeerClass, from rmn.PeerClass, sc
 			break
 		}
 
-		log.Info("Unable to update mismatching peerClass", "peerClass", to[toIdx], "from", from)
+		log.Info("Unable to update peerClass due to mismatching properties", "peerClass", to[toIdx], "from", from)
 
 		break
 	}
