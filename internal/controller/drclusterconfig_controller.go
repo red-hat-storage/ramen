@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	csiaddonsv1alpha1 "github.com/csi-addons/kubernetes-csi-addons/api/csiaddons/v1alpha1"
 	volrep "github.com/csi-addons/kubernetes-csi-addons/api/replication.storage/v1alpha1"
 	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	groupsnapv1beta1 "github.com/red-hat-storage/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
@@ -68,6 +69,7 @@ type DRClusterConfigReconciler struct {
 // +kubebuilder:rbac:groups=snapshot.storage.k8s.io,resources=volumesnapshotclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=replication.storage.openshift.io,resources=volumereplicationclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=cluster.open-cluster-management.io,resources=clusterclaims,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=csiaddons.openshift.io,resources=networkfenceclasses,verbs=get;list;watch
 
 func (r *DRClusterConfigReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("drcc", req.NamespacedName.Name, "rid", util.GetRID())
@@ -322,6 +324,14 @@ func (r *DRClusterConfigReconciler) UpdateSupportedClasses(
 	drCConfig.Status.VolumeGroupSnapshotClasses = vgsClasses
 	slices.Sort(drCConfig.Status.VolumeGroupSnapshotClasses)
 
+	nfClases, err := r.listDRSupportedNFCs(ctx)
+	if err != nil {
+		return err
+	}
+
+	drCConfig.Status.NetworkFenceClasses = nfClases
+	slices.Sort(drCConfig.Status.NetworkFenceClasses)
+
 	return nil
 }
 
@@ -425,6 +435,26 @@ func (r *DRClusterConfigReconciler) listDRSupportedVGSCs(ctx context.Context) ([
 	return vgscs, nil
 }
 
+// listDRSupportedNFCs returns a list of NetworkFenceClass
+func (r *DRClusterConfigReconciler) listDRSupportedNFCs(ctx context.Context) ([]string, error) {
+	nfcs := []string{}
+
+	nfClasses := &csiaddonsv1alpha1.NetworkFenceClassList{}
+	if err := r.Client.List(ctx, nfClasses); err != nil {
+		return nil, fmt.Errorf("failed to list NetworkFenceClasses, %w", err)
+	}
+
+	for i := range nfClasses.Items {
+		if !util.HasAnnotation(&nfClasses.Items[i], StorageIDLabel) {
+			continue
+		}
+
+		nfcs = append(nfcs, nfClasses.Items[i].Name)
+	}
+
+	return nfcs, nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *DRClusterConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	drccMapFn := handler.EnqueueRequestsFromMapFunc(handler.MapFunc(
@@ -473,5 +503,6 @@ func (r *DRClusterConfigReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&volrep.VolumeReplicationClass{}, drccMapFn, drccPredFn).
 		Watches(&volrep.VolumeGroupReplicationClass{}, drccMapFn, drccPredFn).
 		Watches(&groupsnapv1beta1.VolumeGroupSnapshotClass{}, drccMapFn, drccPredFn).
+		Watches(&csiaddonsv1alpha1.NetworkFenceClass{}, drccMapFn, drccPredFn).
 		Complete(r)
 }
