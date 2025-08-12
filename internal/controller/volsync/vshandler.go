@@ -1424,7 +1424,9 @@ func (v *VSHandler) EnsurePVCforDirectCopy(ctx context.Context,
 		// This PVC is used by the RD. We don't need have the finalizer.
 		ctrlutil.RemoveFinalizer(pvc, PVCFinalizerProtected)
 
-		return v.removeOCMAnnotationsAndUpdate(pvc)
+		if err := v.removeOCMAnnotationsAndUpdate(pvc); err != nil {
+			return err
+		}
 	}
 
 	pvc = &corev1.PersistentVolumeClaim{
