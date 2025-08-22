@@ -359,7 +359,7 @@ var _ = Describe("VolSync_Handler", func() {
 					// Run ReconcileRD
 					var err error
 					rdSpec.ProtectedPVC.Namespace = testNamespace.GetName()
-					returnedRD, err = vsHandler.ReconcileRD(rdSpec)
+					returnedRD, err = vsHandler.ReconcileRD(rdSpec, nil)
 					Expect(err).ToNot(HaveOccurred())
 				})
 
@@ -424,7 +424,7 @@ var _ = Describe("VolSync_Handler", func() {
 
 						// Run ReconcileRD
 						var err error
-						_, err = vsHandler.ReconcileRD(rdSpec)
+						_, err = vsHandler.ReconcileRD(rdSpec, nil)
 						Expect(err).ToNot(HaveOccurred())
 					})
 
@@ -441,7 +441,7 @@ var _ = Describe("VolSync_Handler", func() {
 					JustBeforeEach(func() {
 						// Run ReconcileRD
 						var err error
-						returnedRD, err = vsHandler.ReconcileRD(rdSpec)
+						returnedRD, err = vsHandler.ReconcileRD(rdSpec, nil)
 						Expect(err).ToNot(HaveOccurred())
 
 						// RD should be created with name=PVCName
@@ -646,7 +646,7 @@ var _ = Describe("VolSync_Handler", func() {
 					var err error
 					var finalSyncCompl bool
 					rsSpec.ProtectedPVC.Namespace = testNamespace.GetName()
-					finalSyncCompl, returnedRS, err = vsHandler.ReconcileRS(rsSpec, false)
+					finalSyncCompl, returnedRS, err = vsHandler.ReconcileRS(rsSpec, false, nil)
 					Expect(err).ToNot(HaveOccurred())
 					Expect(finalSyncCompl).To(BeFalse())
 				})
@@ -689,7 +689,7 @@ var _ = Describe("VolSync_Handler", func() {
 					It("Should return a replication source and a RS should be created", func() {
 						// Run another reconcile - we have the psk secret now but the pvc is not in use by
 						// a running pod
-						finalSyncCompl, rs, err := vsHandler.ReconcileRS(rsSpec, false)
+						finalSyncCompl, rs, err := vsHandler.ReconcileRS(rsSpec, false, nil)
 						Expect(err).ToNot(HaveOccurred())
 						Expect(finalSyncCompl).To(BeFalse())
 						Expect(rs).ToNot(BeNil())
@@ -710,7 +710,7 @@ var _ = Describe("VolSync_Handler", func() {
 
 					It("Should return a replication source and RS should be created", func() {
 						// Run another reconcile - a pod is mounting the PVC but it is not in running phase
-						finalSyncCompl, rs, err := vsHandler.ReconcileRS(rsSpec, false)
+						finalSyncCompl, rs, err := vsHandler.ReconcileRS(rsSpec, false, nil)
 						Expect(err).ToNot(HaveOccurred())
 						Expect(finalSyncCompl).To(BeFalse())
 						Expect(rs).ToNot(BeNil())
@@ -743,7 +743,7 @@ var _ = Describe("VolSync_Handler", func() {
 					It("Should return a nil replication source and no RS should be created", func() {
 						// Run another reconcile - a pod is mounting the PVC but it is not in running state
 						// a running pod
-						finalSyncCompl, rs, err := vsHandler.ReconcileRS(rsSpec, false)
+						finalSyncCompl, rs, err := vsHandler.ReconcileRS(rsSpec, false, nil)
 						Expect(err).ToNot(HaveOccurred())
 						Expect(finalSyncCompl).To(BeFalse())
 						Expect(rs).ToNot(BeNil())
@@ -798,7 +798,7 @@ var _ = Describe("VolSync_Handler", func() {
 							}, maxWait, interval).Should(Succeed())
 
 							// Run ReconcileRS again - Not running final sync so this should return false
-							finalSyncDone, returnedRS, err := vsHandler.ReconcileRS(rsSpec, false)
+							finalSyncDone, returnedRS, err := vsHandler.ReconcileRS(rsSpec, false, nil)
 							Expect(err).ToNot(HaveOccurred())
 							Expect(finalSyncDone).To(BeFalse())
 							Expect(returnedRS).NotTo(BeNil())
@@ -832,7 +832,7 @@ var _ = Describe("VolSync_Handler", func() {
 							var err error
 
 							// Run ReconcileRS - Not running final sync so this should return false
-							finalSyncDone, returnedRS, err = vsHandler.ReconcileRS(rsSpec, false)
+							finalSyncDone, returnedRS, err = vsHandler.ReconcileRS(rsSpec, false, nil)
 							Expect(err).ToNot(HaveOccurred())
 							Expect(finalSyncDone).To(BeFalse())
 
@@ -932,7 +932,7 @@ var _ = Describe("VolSync_Handler", func() {
 								// volume attachments
 								Context("When the pvc is still in use by a pod", func() {
 									It("Should not complete the final sync", func() {
-										finalSyncDone, returnedRS, err := vsHandler.ReconcileRS(rsSpec, true)
+										finalSyncDone, returnedRS, err := vsHandler.ReconcileRS(rsSpec, true, nil)
 										Expect(err).NotTo(HaveOccurred()) // Not considered an error, we should just wait
 										Expect(returnedRS).NotTo(BeNil()) // Should return the existing RS
 										Expect(finalSyncDone).To(BeFalse())
@@ -964,7 +964,7 @@ var _ = Describe("VolSync_Handler", func() {
 										})
 
 										It("Should not complete the final sync", func() {
-											finalSyncDone, returnedRS, err := vsHandler.ReconcileRS(rsSpec, true)
+											finalSyncDone, returnedRS, err := vsHandler.ReconcileRS(rsSpec, true, nil)
 											Expect(err).NotTo(HaveOccurred()) // Not considered an error, we should just wait
 											Expect(returnedRS).NotTo(BeNil()) // Should return existing RS
 											Expect(finalSyncDone).To(BeFalse())
@@ -1405,12 +1405,12 @@ var _ = Describe("VolSync_Handler", func() {
 
 			for _, rdSpec := range rdSpecList {
 				// create RDs using our vsHandler
-				_, err := vsHandler.ReconcileRD(rdSpec)
+				_, err := vsHandler.ReconcileRD(rdSpec, nil)
 				Expect(err).NotTo(HaveOccurred())
 			}
 			for _, rdSpecOtherOwner := range rdSpecListOtherOwner {
 				// create other RDs using another vsHandler (will be owned by another VRG)
-				_, err := otherVSHandler.ReconcileRD(rdSpecOtherOwner)
+				_, err := otherVSHandler.ReconcileRD(rdSpecOtherOwner, nil)
 				Expect(err).NotTo(HaveOccurred())
 			}
 
@@ -1601,7 +1601,7 @@ var _ = Describe("VolSync_Handler", func() {
 					capacity, nil, corev1.PodRunning, true)
 
 				// create RSs using our vsHandler
-				_, returnedRS, err := vsHandler.ReconcileRS(rsSpec, false)
+				_, returnedRS, err := vsHandler.ReconcileRS(rsSpec, false, nil)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(returnedRS).NotTo(BeNil())
 			}
@@ -1611,7 +1611,7 @@ var _ = Describe("VolSync_Handler", func() {
 					capacity, nil, corev1.PodRunning, true)
 
 				// create other RSs using another vsHandler (will be owned by another VRG)
-				_, returnedRS, err := otherVSHandler.ReconcileRS(rsSpecOtherOwner, false)
+				_, returnedRS, err := otherVSHandler.ReconcileRS(rsSpecOtherOwner, false, nil)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(returnedRS).NotTo(BeNil())
 			}

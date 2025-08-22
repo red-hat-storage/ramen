@@ -118,7 +118,8 @@ func (v *VSHandler) GetWorkloadStatus() string {
 //
 //nolint:cyclop
 func (v *VSHandler) ReconcileRD(
-	rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec) (*volsyncv1alpha1.ReplicationDestination, error,
+	rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec,
+	moverConfig *ramendrv1alpha1.MoverConfig) (*volsyncv1alpha1.ReplicationDestination, error,
 ) {
 	l := v.log.WithValues("rdSpec", rdSpec)
 
@@ -157,7 +158,7 @@ func (v *VSHandler) ReconcileRD(
 
 	var rd *volsyncv1alpha1.ReplicationDestination
 
-	rd, err = v.createOrUpdateRD(rdSpec, pskSecretName, dstPVC)
+	rd, err = v.createOrUpdateRD(rdSpec, pskSecretName, dstPVC, moverConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +197,7 @@ func RDStatusReady(rd *volsyncv1alpha1.ReplicationDestination, log logr.Logger) 
 
 func (v *VSHandler) createOrUpdateRD(
 	rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec, pskSecretName string,
-	dstPVC *string) (*volsyncv1alpha1.ReplicationDestination, error,
+	dstPVC *string, moverConfigSpec *ramendrv1alpha1.MoverConfig) (*volsyncv1alpha1.ReplicationDestination, error,
 ) {
 	l := v.log.WithValues("rdSpec", rdSpec)
 
@@ -205,10 +206,7 @@ func (v *VSHandler) createOrUpdateRD(
 		return nil, err
 	}
 
-	pvcAccessModes := []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce} // Default value
-	if len(rdSpec.ProtectedPVC.AccessModes) > 0 {
-		pvcAccessModes = rdSpec.ProtectedPVC.AccessModes
-	}
+	pvcAccessModes := getPVCAccessModes(rdSpec)
 
 	rd := &volsyncv1alpha1.ReplicationDestination{
 		ObjectMeta: metav1.ObjectMeta{
@@ -231,6 +229,8 @@ func (v *VSHandler) createOrUpdateRD(
 		util.AddAnnotation(rd, OwnerNameAnnotation, v.owner.GetName())
 		util.AddAnnotation(rd, OwnerNamespaceAnnotation, v.owner.GetNamespace())
 
+		moverConfigSecContext, moverServiceAccount := getMoverConfigDetails(moverConfigSpec)
+
 		rd.Spec.RsyncTLS = &volsyncv1alpha1.ReplicationDestinationRsyncTLSSpec{
 			ServiceType: v.getRsyncServiceType(),
 			KeySecret:   &pskSecretName,
@@ -243,6 +243,7 @@ func (v *VSHandler) createOrUpdateRD(
 				VolumeSnapshotClassName: &volumeSnapshotClassName,
 				DestinationPVC:          dstPVC,
 			},
+			MoverSecurityContext: moverConfigSecContext, MoverServiceAccount: moverServiceAccount,
 		}
 
 		return nil
@@ -289,7 +290,8 @@ func (v *VSHandler) isPVCInUseByNonRDPod(pvcNamespacedName types.NamespacedName)
 //
 //nolint:cyclop,funlen,gocognit
 func (v *VSHandler) ReconcileRS(rsSpec ramendrv1alpha1.VolSyncReplicationSourceSpec,
-	runFinalSync bool) (bool /* finalSyncComplete */, *volsyncv1alpha1.ReplicationSource, error,
+	runFinalSync bool,
+	moverConfig *ramendrv1alpha1.MoverConfig) (bool /* finalSyncComplete */, *volsyncv1alpha1.ReplicationSource, error,
 ) {
 	l := v.log.WithValues("rsSpec", rsSpec, "runFinalSync", runFinalSync)
 
@@ -338,7 +340,7 @@ func (v *VSHandler) ReconcileRS(rsSpec ramendrv1alpha1.VolSyncReplicationSourceS
 		return false, existingRS, err
 	}
 
-	replicationSource, err := v.createOrUpdateRS(rsSpec, pskSecretName, runFinalSync)
+	replicationSource, err := v.createOrUpdateRS(rsSpec, pskSecretName, runFinalSync, moverConfig)
 	if err != nil {
 		return false, replicationSource, err
 	}
@@ -414,7 +416,8 @@ func (v *VSHandler) cleanupAfterRSFinalSync(rsSpec ramendrv1alpha1.VolSyncReplic
 
 //nolint:funlen
 func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSourceSpec,
-	pskSecretName string, runFinalSync bool) (*volsyncv1alpha1.ReplicationSource, error,
+	pskSecretName string, runFinalSync bool,
+	moverConfigSpec *ramendrv1alpha1.MoverConfig) (*volsyncv1alpha1.ReplicationSource, error,
 ) {
 	l := v.log.WithValues("rsSpec", rsSpec, "runFinalSync", runFinalSync)
 
@@ -467,6 +470,8 @@ func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSo
 			return err
 		}
 
+		moverConfigSecContext, moverServiceAccount := getMoverConfigDetails(moverConfigSpec)
+
 		rs.Spec.RsyncTLS = &volsyncv1alpha1.ReplicationSourceRsyncTLSSpec{
 			KeySecret: &pskSecretName,
 			Address:   &remoteAddress,
@@ -479,6 +484,8 @@ func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSo
 				StorageClassName:        rsSpec.ProtectedPVC.StorageClassName,
 				AccessModes:             rsSpec.ProtectedPVC.AccessModes,
 			},
+			MoverSecurityContext: moverConfigSecContext,
+			MoverServiceAccount:  moverServiceAccount,
 		}
 
 		return nil
@@ -2595,4 +2602,29 @@ func updateClaimRef(pv *corev1.PersistentVolume, name, namespace string) {
 		pv.Spec.ClaimRef.Name = name
 		pv.Spec.ClaimRef.Namespace = namespace
 	}
+}
+
+func getMoverConfigDetails(moverConfigSpec *ramendrv1alpha1.MoverConfig) (*corev1.PodSecurityContext, *string) {
+	moverConfigSecContext := &corev1.PodSecurityContext{}
+	moverServiceAccount := ""
+
+	if moverConfigSpec != nil {
+		if moverConfigSpec.MoverSecurityContext != nil {
+			moverConfigSecContext = moverConfigSpec.MoverSecurityContext
+		}
+
+		if moverConfigSpec.MoverServiceAccount != nil {
+			moverServiceAccount = *moverConfigSpec.MoverServiceAccount
+		}
+	}
+
+	return moverConfigSecContext, &moverServiceAccount
+}
+
+func getPVCAccessModes(rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec) []corev1.PersistentVolumeAccessMode {
+	if len(rdSpec.ProtectedPVC.AccessModes) > 0 {
+		return rdSpec.ProtectedPVC.AccessModes
+	}
+
+	return []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
 }
