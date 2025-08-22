@@ -6,6 +6,7 @@ package volsync
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -2605,20 +2606,27 @@ func updateClaimRef(pv *corev1.PersistentVolume, name, namespace string) {
 }
 
 func getMoverConfigDetails(moverConfigSpec *ramendrv1alpha1.MoverConfig) (*corev1.PodSecurityContext, *string) {
-	moverConfigSecContext := &corev1.PodSecurityContext{}
-	moverServiceAccount := ""
-
-	if moverConfigSpec != nil {
-		if moverConfigSpec.MoverSecurityContext != nil {
-			moverConfigSecContext = moverConfigSpec.MoverSecurityContext
-		}
-
-		if moverConfigSpec.MoverServiceAccount != nil {
-			moverServiceAccount = *moverConfigSpec.MoverServiceAccount
-		}
+	if moverConfigSpec == nil {
+		return nil, nil
 	}
 
-	return moverConfigSecContext, &moverServiceAccount
+	if moverConfigSpec.MoverSecurityContext == nil && moverConfigSpec.MoverServiceAccount == nil {
+		return nil, nil
+	}
+
+	var moverConfigSecContext *corev1.PodSecurityContext
+
+	var moverServiceAccount *string
+
+	if moverConfigSpec.MoverSecurityContext != nil && !reflect.DeepEqual(*moverConfigSpec.MoverSecurityContext, (corev1.PodSecurityContext{})) {
+		moverConfigSecContext = moverConfigSpec.MoverSecurityContext
+	}
+
+	if moverConfigSpec.MoverServiceAccount != nil && len(*moverConfigSpec.MoverServiceAccount) > 0 {
+		moverServiceAccount = moverConfigSpec.MoverServiceAccount
+	}
+
+	return moverConfigSecContext, moverServiceAccount
 }
 
 func getPVCAccessModes(rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec) []corev1.PersistentVolumeAccessMode {
