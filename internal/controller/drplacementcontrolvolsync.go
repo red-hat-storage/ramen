@@ -179,6 +179,10 @@ func (d *DRPCInstance) refreshVRGSecondarySpec(srcCluster, dstCluster string) (*
 	if d.drType == DRTypeAsync {
 		if len(srcVRGView.Status.ProtectedPVCs) != 0 {
 			d.resetRDSpec(srcVRGView, &dstVRG)
+
+			if d.instance.Spec.VolSyncSpec != nil {
+				d.updateMoverConfig(&dstVRG)
+			}
 		}
 
 		// Update destination VRG peerClasses with the source classes, such that when secondary is promoted to primary
