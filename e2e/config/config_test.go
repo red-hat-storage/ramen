@@ -5,6 +5,8 @@ package config
 
 import (
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
 func TestReadConfig(t *testing.T) {
@@ -35,14 +37,9 @@ func TestReadConfig(t *testing.T) {
 			{Name: "cephfs", StorageClassName: "rook-cephfs-fs1", AccessModes: "ReadWriteMany"},
 		},
 		Deployers: []Deployer{
-			{Name: "appset", Type: "appset", Description: "ApplicationSet deployer for ArgoCD"},
-			{Name: "subscr", Type: "subscr", Description: "Subscription deployer for OCM subscriptions"},
-			{Name: "disapp", Type: "disapp", Description: "Discovered Application deployer for discovered applications"},
-			{
-				Name:        "disapp-recipe",
-				Type:        "disapp",
-				Description: "Discovered Application deployer for discovered applications with recipe",
-			},
+			{Name: "appset", Type: "appset", Description: "ApplicationSet based deployer"},
+			{Name: "subscr", Type: "subscr", Description: "OCM Subscription based deployer"},
+			{Name: "disapp", Type: "disapp", Description: "Discovered application deployer"},
 		},
 		Tests: []Test{
 			{Workload: "deploy", Deployer: "appset", PVCSpec: "rbd"},
@@ -54,7 +51,7 @@ func TestReadConfig(t *testing.T) {
 		},
 	}
 	if !c.Equal(expected) {
-		t.Fatalf("expected %+v, got %+v", expected, c)
+		t.Fatalf("expected\n%s\ngot\n%s", marshal(t, expected), marshal(t, c))
 	}
 }
 
@@ -156,9 +153,10 @@ func baseConfig() *Config {
 			{Name: "pvc-a", StorageClassName: "standard", AccessModes: "ReadWriteOnce"},
 		},
 		Deployers: []Deployer{
-			{Name: "appset", Type: "appset", Description: "ApplicationSet deployer for ArgoCD"},
-			{Name: "subscr", Type: "subscr", Description: "Subscription deployer for OCM subscriptions"},
-			{Name: "disapp", Type: "disapp", Description: "Discovered Application deployer for discovered applications"},
+			{Name: "appset", Type: "appset", Description: "ApplicationSet based deployer"},
+			{Name: "subscr", Type: "subscr", Description: "OCM Subscription based deployer"},
+			{Name: "disapp", Type: "disapp", Description: "Discovered application deployer"},
+			{Name: "disapp-recipe", Type: "disapp", Recipe: &Recipe{}, Description: "Discovered application deployer"},
 		},
 		Tests: []Test{
 			{Workload: "wl1", Deployer: "ocm-hub", PVCSpec: "pvc-a"},
@@ -252,6 +250,32 @@ func TestConfigNotEqual(t *testing.T) {
 			Name: "different ramen hub namespace",
 			Modify: func(c *Config) {
 				c.Namespaces.RamenHubNamespace = "modified-ns"
+			},
+		},
+		{
+			Name: "different deployer name",
+			Modify: func(c *Config) {
+				c.Deployers[0].Name = "modified-name"
+			},
+		},
+		{
+			Name: "different deployer type",
+			Modify: func(c *Config) {
+				c.Deployers[0].Type = "modified-type"
+			},
+		},
+		{
+			Name: "different deployer recipe",
+			Modify: func(c *Config) {
+				// Recipe was nil
+				c.Deployers[2].Recipe = &Recipe{}
+			},
+		},
+		{
+			Name: "different deployer recipe hooks",
+			Modify: func(c *Config) {
+				// Recipe had no hooks
+				c.Deployers[3].Recipe = &Recipe{CheckHook: true}
 			},
 		},
 	}
@@ -351,4 +375,15 @@ func TestValidateDeployers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func marshal(t *testing.T, obj any) []byte {
+	t.Helper()
+
+	b, err := yaml.Marshal(obj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return b
 }

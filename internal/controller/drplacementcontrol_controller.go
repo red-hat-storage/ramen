@@ -8,9 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"time"
-
-	"golang.org/x/exp/slices"
 
 	"github.com/go-logr/logr"
 	core "github.com/ramendr/ramen/internal/controller/core"
@@ -772,6 +771,10 @@ func (r *DRPlacementControlReconciler) ensureVRGsDeleted(
 				return fmt.Errorf("%s VRG adoption in progress", replicationState)
 			}
 
+			if err := r.ensureDoNotDeletePVCAnnotation(mwu, drpc, vrg, cluster, r.Log); err != nil {
+				return fmt.Errorf("wait for annotation to propagate to the VRG. Msg: %w", err)
+			}
+
 			if err := mwu.DeleteManifestWork(mwu.BuildManifestWorkName(rmnutil.MWTypeVRG), cluster); err != nil {
 				return fmt.Errorf("failed to delete %s VRG manifestwork for cluster %q: %w", replicationState, cluster, err)
 			}
@@ -1514,7 +1517,6 @@ func setConflictStatusCondition(existingConditions *[]metav1.Condition,
 	// TODO: Why not update lastTranTime if the above change?
 
 	if existingCondition.ObservedGeneration != newCondition.ObservedGeneration {
-		existingCondition.ObservedGeneration = newCondition.ObservedGeneration
 		existingCondition.LastTransitionTime = metav1.NewTime(time.Now())
 	}
 
@@ -2885,4 +2887,79 @@ func (r *DRPlacementControlReconciler) twoVMDRPCsConflict(drpc *rmn.DRPlacementC
 	}
 
 	return false
+}
+
+// ensureDoNotDeletePVCAnnotation ensures that the "do-not-delete-pvc" annotation is propagated from the DRPC
+// resource to the VRG resource on the specified cluster. If the annotation is set on the DRPC but not yet
+// present on the VRG, this function updates the VRG ManifestWork to include the annotation. This is used to
+// prevent deletion of app PVCs during DR disabling.
+func (r *DRPlacementControlReconciler) ensureDoNotDeletePVCAnnotation(
+	mwu rmnutil.MWUtil,
+	drpc *rmn.DRPlacementControl,
+	vrg *rmn.VolumeReplicationGroup,
+	cluster string,
+	log logr.Logger,
+) error {
+	if vrg.Spec.ReplicationState != rmn.Primary {
+		return nil // Only propagate the annotation if the VRG is in primary state
+	}
+
+	if drpc.GetAnnotations()[DoNotDeletePVCAnnotation] == DoNotDeletePVCAnnotationVal &&
+		vrg.GetAnnotations()[DoNotDeletePVCAnnotation] != DoNotDeletePVCAnnotationVal {
+		err := propagateAnnotationToVRG(mwu, cluster, DoNotDeletePVCAnnotation, DoNotDeletePVCAnnotationVal, log)
+
+		return fmt.Errorf("annotation hasn't been propagated to cluster %s (%w)", cluster, err)
+	}
+
+	return nil
+}
+
+// propagateAnnotationToVRG adds or updates a specific annotation on a VRG resource in the ManifestWork
+// for the given cluster. This is typically used to propagate the "do-not-delete-pvc" annotation from
+// the DRPC to the VRG, to ensure that app PVCs are not deleted during DR disabling.
+func propagateAnnotationToVRG(
+	mwu rmnutil.MWUtil,
+	toCluster string,
+	annoKey, annoValue string,
+	log logr.Logger,
+) error {
+	log.Info("propagate Annotation to VRG")
+
+	mw, mwErr := mwu.FindManifestWorkByType(rmnutil.MWTypeVRG, toCluster)
+	if mwErr != nil {
+		if k8serrors.IsNotFound(mwErr) {
+			return fmt.Errorf("failed to find ManifestWork for VRG and cluster %s", toCluster)
+		}
+
+		return fmt.Errorf("error (%w) in finding ManifestWork for VRG and cluster %s",
+			mwErr, toCluster)
+	}
+
+	vrg, err := rmnutil.ExtractVRGFromManifestWork(mw)
+	if err != nil {
+		return fmt.Errorf("error extracting VRG from ManifestWork for cluster %s. Error: %w", toCluster, err)
+	}
+
+	if vrg.Spec.ReplicationState != rmn.Primary {
+		return fmt.Errorf("invalid update for VRG in %s spec.replicationState on cluster %s",
+			vrg.Spec.ReplicationState, toCluster)
+	}
+
+	if vrg.GetAnnotations() == nil {
+		vrg.SetAnnotations(make(map[string]string))
+	}
+
+	if vrg.GetAnnotations()[annoKey] == annoValue {
+		log.Info(fmt.Sprintf("Annotation %s already exists with value %s on VRG %s in cluster %s",
+			annoKey, annoValue, vrg.Name, toCluster))
+
+		return nil
+	}
+
+	log.Info(fmt.Sprintf("Adding/Updating Annotation %s with value %s on VRG %s in cluster %s",
+		annoKey, annoValue, vrg.Name, toCluster))
+
+	vrg.GetAnnotations()[annoKey] = annoValue
+
+	return mwu.UpdateVRGManifestWork(vrg, mw)
 }
