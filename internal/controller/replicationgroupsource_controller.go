@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"github.com/go-logr/logr"
-	vgsv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
+	vgsv1beta1 "github.com/red-hat-storage/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -143,7 +143,7 @@ func (r *ReplicationGroupSourceReconciler) Reconcile(ctx context.Context, req ct
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ReplicationGroupSourceReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if util.IsCRDInstalled(context.TODO(), r.APIReader, util.VGSCRDName) {
+	if util.IsCRDInstalled(context.TODO(), r.APIReader, util.VGSCRDPrivateName) {
 		r.volumeGroupSnapshotCRsAreWatched = true
 	}
 
