@@ -4,7 +4,7 @@ module github.com/ramendr/ramen/api
 go 1.23.5
 
 // Recommended version: latest go 1.23 release.
-toolchain go1.23.7
+toolchain go1.23.12
 
 require (
 	k8s.io/api v0.29.0
