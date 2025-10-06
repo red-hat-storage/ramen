@@ -35,11 +35,19 @@ func (c CheckHook) Execute(log logr.Logger) error {
 	}
 
 	hookName := c.Hook.Name + "/" + c.Hook.Chk.Name
-	log.Info("check hook executed successfully", "hook", hookName, "result", hookResult)
+
+	if !hookResult && c.Hook.SkipHookIfNotPresent {
+		log.Info("check hook skipped due to skip flag for", "hook", hookName, "resource type",
+			c.Hook.SelectResource)
+
+		return nil
+	}
 
 	if !hookResult && shouldChkHookBeFailedOnError(c.Hook) {
 		return fmt.Errorf("stopping workflow as hook %s failed", c.Hook.Name)
 	}
+
+	log.Info("check hook executed successfully", "hook", hookName, "result", hookResult)
 
 	return nil
 }
@@ -75,7 +83,12 @@ func EvaluateCheckHook(k8sReader client.Reader, hook *kubeobjects.HookSpec, log 
 	for int(pollInterval.Seconds()) < timeout {
 		select {
 		case <-ctx.Done():
-			return false, fmt.Errorf("timeout waiting for resource %s to be ready: %w", hook.NameSelector, ctx.Err())
+			if hook.SkipHookIfNotPresent {
+				return false, nil
+			}
+
+			return false, fmt.Errorf("no resource found with nameSelector %s and labelSelector %s: %w",
+				hook.NameSelector, hook.LabelSelector, ctx.Err())
 		case <-ticker.C:
 			objs, err := getResourcesList(k8sReader, hook, log)
 			if err != nil {
