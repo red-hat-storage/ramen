@@ -533,10 +533,7 @@ const (
 	// StorageClass offloaded label
 	StorageOffloadedLabel = "ramendr.openshift.io/offloaded"
 
-	// Consistency group label
-	ConsistencyGroupLabel = "ramendr.openshift.io/consistency-group"
-
-	// VolumeReplicationClass label
+	// VolumeReplicationClass and VolumeGroupReplicationClass label
 	ReplicationIDLabel = "ramendr.openshift.io/replicationid"
 
 	// VolumeGroupReplicationClass label
@@ -883,7 +880,7 @@ func (v *VRGInstance) addVolRepConsistencyGroupLabel(pvc *corev1.PersistentVolum
 
 	// Add label for PVC, showing that this PVC is part of consistency group
 	return util.NewResourceUpdater(pvc).
-		AddLabel(ConsistencyGroupLabel, groupReplicationID).
+		AddLabel(util.ConsistencyGroupLabel, groupReplicationID).
 		Update(v.ctx, v.reconciler.Client)
 }
 
@@ -895,7 +892,7 @@ func (v *VRGInstance) addConsistencyGroupLabel(pvc *corev1.PersistentVolumeClaim
 
 	// Add a CG label to indicate that this PVC belongs to a consistency group.
 	return util.NewResourceUpdater(pvc).
-		AddLabel(ConsistencyGroupLabel, cgLabelVal).
+		AddLabel(util.ConsistencyGroupLabel, cgLabelVal).
 		Update(v.ctx, v.reconciler.Client)
 }
 
@@ -1079,7 +1076,7 @@ func (v *VRGInstance) separatePVCUsingPeerClassAndSC(peerClasses []ramendrv1alph
 	}
 
 	// label VolSync PVCs if peerClass.grouping is enabled
-	if peerClass.Grouping {
+	if peerClass.Grouping && !v.instance.Spec.RunFinalSync {
 		if err := v.addConsistencyGroupLabel(pvc); err != nil {
 			return fmt.Errorf("failed to label PVC %s/%s for consistency group (%w)",
 				pvc.GetNamespace(), pvc.GetName(), err)
@@ -1591,7 +1588,7 @@ func (v *VRGInstance) pvcsDeselectedUnprotect() error {
 			"PVC deselection skipped",
 			"replicationstate",
 			v.instance.Spec.ReplicationState,
-			"finalsync",
+			"Prepare or run final sync",
 			v.instance.Spec.PrepareForFinalSync || v.instance.Spec.RunFinalSync,
 		)
 

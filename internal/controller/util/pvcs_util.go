@@ -30,8 +30,9 @@ const (
 	PodVolumePVCClaimIndexName    string = "spec.volumes.persistentVolumeClaim.claimName"
 	VolumeAttachmentToPVIndexName string = "spec.source.persistentVolumeName"
 
-	// Consistency group label
 	ConsistencyGroupLabel = "ramendr.openshift.io/consistency-group"
+
+	SuffixForFinalsyncPVC = "-for-finalsync"
 )
 
 // nolint:funlen
@@ -101,6 +102,8 @@ func ListPVCsByPVCSelector(
 			pvcs = append(pvcs, pvc)
 		}
 	}
+
+	logger.Info(fmt.Sprintf("Returning %d PVCs in namespace(s) %v", len(pvcs), namespaces))
 
 	pvcList.Items = pvcs
 
@@ -389,4 +392,8 @@ func sortJSON(v interface{}) interface{} {
 	}
 
 	return v
+}
+
+func GetTmpPVCNameForFinalSync(pvcName string) string {
+	return fmt.Sprintf("%s%s", pvcName, SuffixForFinalsyncPVC)
 }
