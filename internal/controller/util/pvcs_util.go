@@ -29,6 +29,10 @@ const (
 
 	PodVolumePVCClaimIndexName    string = "spec.volumes.persistentVolumeClaim.claimName"
 	VolumeAttachmentToPVIndexName string = "spec.source.persistentVolumeName"
+
+	ConsistencyGroupLabel = "ramendr.openshift.io/consistency-group"
+
+	SuffixForFinalsyncPVC = "-for-finalsync"
 )
 
 // nolint:funlen
@@ -99,7 +103,43 @@ func ListPVCsByPVCSelector(
 		}
 	}
 
+	logger.Info(fmt.Sprintf("Returning %d PVCs in namespace(s) %v", len(pvcs), namespaces))
+
 	pvcList.Items = pvcs
+
+	return pvcList, nil
+}
+
+func ListPVCsByCGLabel(
+	ctx context.Context,
+	k8sClient client.Client,
+	namespace string,
+	cgLabelVal string,
+	logger logr.Logger,
+) (*corev1.PersistentVolumeClaimList, error) {
+	logger.Info("Fetching PVCs in CG", "GC Label", cgLabelVal)
+
+	if cgLabelVal == "" {
+		logger.Info("CG label value is empty, returning empty PVC list")
+
+		return &corev1.PersistentVolumeClaimList{}, nil
+	}
+
+	listOptions := []client.ListOption{
+		client.InNamespace(namespace),
+		client.MatchingLabels{
+			ConsistencyGroupLabel: cgLabelVal,
+		},
+	}
+
+	pvcList := &corev1.PersistentVolumeClaimList{}
+	if err := k8sClient.List(ctx, pvcList, listOptions...); err != nil {
+		logger.Error(err, "Failed to list PVCs using CG label", "label", cgLabelVal)
+
+		return nil, fmt.Errorf("failed to list PVCs using CG label, %w", err)
+	}
+
+	logger.Info(fmt.Sprintf("Found %d PVCs using CG label %s", len(pvcList.Items), cgLabelVal))
 
 	return pvcList, nil
 }
@@ -352,4 +392,8 @@ func sortJSON(v interface{}) interface{} {
 	}
 
 	return v
+}
+
+func GetTmpPVCNameForFinalSync(pvcName string) string {
+	return fmt.Sprintf("%s%s", pvcName, SuffixForFinalsyncPVC)
 }
