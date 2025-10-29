@@ -19,11 +19,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	clrapiv1beta1 "open-cluster-management.io/api/cluster/v1beta1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
 	rmnutil "github.com/ramendr/ramen/internal/controller/util"
-
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
@@ -390,9 +389,30 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 		return !done, err
 	}
 
+	// Use the DRPC Protected condition to check if it is true and then allow failover
+	if !d.isProtected() {
+		return !done, nil
+	}
+
 	d.setStatusInitiating()
 
 	return d.switchToFailoverCluster()
+}
+
+func (d *DRPCInstance) isProtected() bool {
+	for _, cond := range d.instance.Status.Conditions {
+		if cond.Type == rmn.ConditionProtected && cond.Status == metav1.ConditionTrue {
+			return true
+		}
+	}
+
+	const msg = "cannot start failover because workload is not protected"
+	d.log.Info("Failover blocked", "reason", msg)
+
+	addOrUpdateCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
+		metav1.ConditionFalse, string(d.instance.Status.Phase), msg)
+
+	return false
 }
 
 // isValidFailoverTarget determines if the passed in cluster is a valid target to failover to. A valid failover target

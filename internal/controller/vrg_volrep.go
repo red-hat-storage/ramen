@@ -11,9 +11,8 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/go-logr/logr"
-
 	volrep "github.com/csi-addons/kubernetes-csi-addons/api/replication.storage/v1alpha1"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -886,6 +885,7 @@ func (v *VRGInstance) pvcUnprotectVolRep(pvc corev1.PersistentVolumeClaim, log l
 	v.pvcStatusDeleteIfPresent(pvc.Namespace, pvc.Name, log)
 }
 
+//nolint:funlen,gocognit,cyclop
 func (v *VRGInstance) pvcsUnprotectVolRep(pvcs []corev1.PersistentVolumeClaim) {
 	groupPVCs := make(map[types.NamespacedName][]*corev1.PersistentVolumeClaim)
 
@@ -914,6 +914,17 @@ func (v *VRGInstance) pvcsUnprotectVolRep(pvcs []corev1.PersistentVolumeClaim) {
 		}
 
 		if cg, ok := v.isCGEnabled(pvc); ok {
+			if cg == "" {
+				grID, err := v.getVGRClassReplicationID(pvc)
+				if err != nil {
+					v.requeue()
+
+					continue
+				}
+
+				cg = grID
+			}
+
 			vgrName := rmnutil.CreateVGRName(cg, v.instance.Name)
 			vgrNamespacedName := types.NamespacedName{Name: vgrName, Namespace: pvc.Namespace}
 

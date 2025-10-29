@@ -15,29 +15,27 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/format"
 	. "github.com/onsi/gomega/gstruct"
+	plrv1 "github.com/stolostron/multicloud-operators-placementrule/pkg/apis/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/util/retry"
-	"sigs.k8s.io/yaml"
-
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
+	spokeClusterV1 "open-cluster-management.io/api/cluster/v1"
+	clrapiv1beta1 "open-cluster-management.io/api/cluster/v1beta1"
+	ocmworkv1 "open-cluster-management.io/api/work/v1"
+	gppv1 "open-cluster-management.io/governance-policy-propagator/api/v1"
+	viewv1beta1 "open-cluster-management.io/multicloud-operators-subscription/pkg/apis/view/v1beta1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	spokeClusterV1 "open-cluster-management.io/api/cluster/v1"
-	ocmworkv1 "open-cluster-management.io/api/work/v1"
-	viewv1beta1 "open-cluster-management.io/multicloud-operators-subscription/pkg/apis/view/v1beta1"
+	"sigs.k8s.io/yaml"
 
 	rmn "github.com/ramendr/ramen/api/v1alpha1"
 	controllers "github.com/ramendr/ramen/internal/controller"
 	argocdv1alpha1hack "github.com/ramendr/ramen/internal/controller/argocd"
 	rmnutil "github.com/ramendr/ramen/internal/controller/util"
-	plrv1 "github.com/stolostron/multicloud-operators-placementrule/pkg/apis/apps/v1"
-	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
-	clrapiv1beta1 "open-cluster-management.io/api/cluster/v1beta1"
-	gppv1 "open-cluster-management.io/governance-policy-propagator/api/v1"
 )
 
 const (
@@ -447,6 +445,18 @@ func GetFakeVRGFromMCVUsingMW(managedCluster, resourceNamespace string,
 		LastTransitionTime: metav1.Now(),
 		ObservedGeneration: vrg.Generation,
 	})
+
+	vrg.Status.Conditions = append(vrg.Status.Conditions, metav1.Condition{
+		Type:               controllers.VRGConditionTypeNoClusterDataConflict,
+		Reason:             controllers.VRGConditionReasonNoConflictDetected,
+		Status:             metav1.ConditionTrue,
+		Message:            "No resource conflict",
+		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: vrg.Generation,
+	})
+
+	t := metav1.Now()
+	vrg.Status.LastGroupSyncTime = &t
 
 	return vrg, nil
 }
@@ -1177,6 +1187,15 @@ func verifyUserPlacementRuleDecision(name, namespace, homeCluster string) {
 	Expect(placementObj.GetAnnotations()[controllers.DRPCNamespaceAnnotation]).Should(Equal(namespace))
 }
 
+func waitForDRPCProtected(namespace string) {
+	Eventually(func() bool {
+		drpc := getLatestDRPC(namespace)
+		_, cond := getDRPCCondition(&drpc.Status, rmn.ConditionProtected)
+
+		return cond != nil && cond.Status == metav1.ConditionTrue
+	}, timeout, interval).Should(BeTrue())
+}
+
 func getPlacementDecision(plName, plNamespace string) *clrapiv1beta1.PlacementDecision {
 	plDecision := &clrapiv1beta1.PlacementDecision{}
 	plDecisionKey := types.NamespacedName{
@@ -1466,6 +1485,8 @@ func relocateToPreferredCluster(placementObj client.Object, fromCluster string) 
 
 	updateManifestWorkStatus(toCluster1, placementObj.GetNamespace(), "vrg", ocmworkv1.WorkApplied)
 
+	waitForDRPCProtected(placementObj.GetNamespace())
+
 	verifyUserPlacementRuleDecision(placementObj.GetName(), placementObj.GetNamespace(), toCluster1)
 	verifyDRPCStatusPreferredClusterExpectation(placementObj.GetNamespace(), rmn.Relocated)
 	verifyVRGManifestWorkCreatedAsPrimary(placementObj.GetNamespace(), toCluster1)
@@ -1477,6 +1498,8 @@ func recoverToFailoverCluster(placementObj client.Object, fromCluster, toCluster
 	setDRPCSpecExpectationTo(placementObj.GetNamespace(), fromCluster, toCluster, rmn.ActionFailover)
 
 	updateManifestWorkStatus(toCluster, placementObj.GetNamespace(), "vrg", ocmworkv1.WorkApplied)
+
+	waitForDRPCProtected(placementObj.GetNamespace())
 
 	verifyUserPlacementRuleDecision(placementObj.GetName(), placementObj.GetNamespace(), toCluster)
 	verifyDRPCStatusPreferredClusterExpectation(placementObj.GetNamespace(), rmn.FailedOver)
