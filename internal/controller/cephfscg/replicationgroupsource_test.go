@@ -15,6 +15,7 @@ import (
 	"github.com/ramendr/ramen/hack/fakes"
 	controllers "github.com/ramendr/ramen/internal/controller"
 	"github.com/ramendr/ramen/internal/controller/cephfscg"
+	"github.com/ramendr/ramen/internal/controller/util"
 	"github.com/ramendr/ramen/internal/controller/volsync"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,7 +35,7 @@ var _ = Describe("Replicationgroupsource", func() {
 				Name:      rgsName,
 				Namespace: "default",
 				UID:       "123",
-				Labels:    map[string]string{volsync.VRGOwnerNameLabel: vrgName},
+				Labels:    map[string]string{util.VRGOwnerNameLabel: vrgName},
 			},
 			Status: ramendrv1alpha1.ReplicationGroupSourceStatus{
 				LastSyncStartTime: &metaTime,
