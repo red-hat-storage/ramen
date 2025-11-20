@@ -22,6 +22,7 @@ const (
 	LastSyncDurationSeconds  = "last_sync_duration_seconds"
 	LastSyncDataBytes        = "last_sync_data_bytes"
 	WorkloadProtectionStatus = "workload_protection_status"
+	CGEnabled                = "unsupported_consistency_grouping_enabled"
 )
 
 type SyncTimeMetrics struct {
@@ -42,6 +43,9 @@ type SyncDataBytesMetrics struct {
 
 type WorkloadProtectionMetrics struct {
 	WorkloadProtectionStatus prometheus.Gauge
+}
+type CGEnabledMetrics struct {
+	CGEnabled prometheus.Gauge
 }
 
 type SyncMetrics struct {
@@ -86,6 +90,12 @@ var (
 	}
 
 	workloadProtectionStatusLabels = []string{
+		ObjType,      // Name of the type of the resource [drpc]
+		ObjName,      // Name of the resoure [drpc-name]
+		ObjNamespace, // DRPC namespace
+	}
+
+	cgEnabledMetricLabels = []string{
 		ObjType,      // Name of the type of the resource [drpc]
 		ObjName,      // Name of the resoure [drpc-name]
 		ObjNamespace, // DRPC namespace
@@ -136,6 +146,15 @@ var (
 			Help:      "Status regarding workload protection health",
 		},
 		workloadProtectionStatusLabels,
+	)
+
+	cgEnabled = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name:      CGEnabled,
+			Namespace: metricNamespace,
+			Help:      "Unsupported consistency grouping enabled status",
+		},
+		cgEnabledMetricLabels,
 	)
 )
 
@@ -234,6 +253,25 @@ func DeleteWorkloadProtectionStatusMetric(labels prometheus.Labels) bool {
 	return workloadProtectionStatus.Delete(labels)
 }
 
+// CGEnabled Metric reports information if consistency grouping is enabled for a DRPC
+func CGEnabledMetricLabels(drpc *rmn.DRPlacementControl) prometheus.Labels {
+	return prometheus.Labels{
+		ObjType:      "DRPlacementControl",
+		ObjName:      drpc.Name,
+		ObjNamespace: drpc.Namespace,
+	}
+}
+
+func NewCGEnabledMetric(labels prometheus.Labels) CGEnabledMetrics {
+	return CGEnabledMetrics{
+		CGEnabled: cgEnabled.With(labels),
+	}
+}
+
+func DeleteCGEnabledMetric(labels prometheus.Labels) bool {
+	return cgEnabled.Delete(labels)
+}
+
 func init() {
 	// Register custom metrics with the global prometheus registry
 	metrics.Registry.MustRegister(dRPolicySyncInterval)
@@ -241,4 +279,5 @@ func init() {
 	metrics.Registry.MustRegister(lastSyncDuration)
 	metrics.Registry.MustRegister(lastSyncDataBytes)
 	metrics.Registry.MustRegister(workloadProtectionStatus)
+	metrics.Registry.MustRegister(cgEnabled)
 }
