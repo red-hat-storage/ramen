@@ -118,6 +118,7 @@ func (c *cgHandler) CreateOrUpdateReplicationGroupDestination(
 	}
 
 	util.AddLabel(rgd, util.CreatedByRamenLabel, "true")
+	util.AddLabel(rgd, util.ExcludeFromVeleroBackup, "true")
 
 	_, err := ctrlutil.CreateOrUpdate(c.ctx, c.Client, rgd, func() error {
 		util.AddLabel(rgd, volsync.VRGOwnerNameLabel, c.instance.GetName())
@@ -207,6 +208,7 @@ func (c *cgHandler) CreateOrUpdateReplicationGroupSource(
 	}
 
 	util.AddLabel(rgs, util.CreatedByRamenLabel, "true")
+	util.AddLabel(rgs, util.ExcludeFromVeleroBackup, "true")
 
 	_, err = ctrlutil.CreateOrUpdate(c.ctx, c.Client, rgs, func() error {
 		util.AddLabel(rgs, volsync.VRGOwnerNameLabel, c.instance.GetName())
