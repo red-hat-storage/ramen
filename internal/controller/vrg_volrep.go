@@ -2854,46 +2854,13 @@ func (v *VRGInstance) aggregateVolRepClusterDataProtectedCondition() *metav1.Con
 	return newVRGClusterDataProtectedCondition(v.instance.Generation, msg)
 }
 
-// pruneAnnotations takes a map of annotations and removes the annotations where the key start with:
-//   - pv.kubernetes.io
-//   - replication.storage.openshift.io
-//   - volumereplicationgroups.ramendr.openshift.io
-//
-// Parameters:
-//
-//	annotations: the map of annotations to prune
-//
-// Returns:
-//
-//	a new map containing only the remaining annotations
-func PruneAnnotations(annotations map[string]string) map[string]string {
-	if annotations == nil {
-		return map[string]string{}
-	}
-
-	result := make(map[string]string)
-
-	for key, value := range annotations {
-		switch {
-		case strings.HasPrefix(key, "pv.kubernetes.io"):
-			continue
-		case strings.HasPrefix(key, "replication.storage.openshift.io"):
-			continue
-		case strings.HasPrefix(key, "volumereplicationgroups.ramendr.openshift.io"):
-			continue
-		case strings.HasPrefix(key, "volsync.backube"):
-			continue
-		}
-
-		result[key] = value
-	}
-
-	return result
-}
-
 // Checks and requeues reconciler of VM resource cleanup.
 func (v *VRGInstance) HandleSecondaryConflictsAndCleanup() bool {
 	if !v.isVMRecipeProtection() {
+		setVRGAutoCleanupCondition(&v.instance.Status.Conditions, v.instance.Status.ObservedGeneration,
+			metav1.ConditionFalse,
+			VRGConditionReasonUnused, "AutoCleanup is not applicable for protection schemes other than vm-recipe.")
+
 		return false
 	}
 
@@ -2916,11 +2883,30 @@ func (v *VRGInstance) HandleSecondaryConflictsAndCleanup() bool {
 	if !v.IsDRActionInProgress() {
 		v.log.Info("Skip resource cleanup; reconcile as secondary")
 
+		if len(v.volSyncPVCs) > 0 {
+			setVRGAutoCleanupCondition(&v.instance.Status.Conditions, v.instance.Status.ObservedGeneration,
+				metav1.ConditionFalse,
+				VRGConditionReasonUnused, "Applications containing VolSync-protected volumes are excluded from AutoCleanup.")
+
+			return false
+		}
+
+		setVRGAutoCleanupCondition(&v.instance.Status.Conditions, v.instance.Status.ObservedGeneration,
+			metav1.ConditionTrue,
+			VRGConditionReasonUnused, "No disaster recovery operation in progress.")
+
+		return false
+	}
+
+	if v.IsVMAutoCleanUpNotFeasible() {
 		return false
 	}
 
 	if v.ShouldCleanupVMForSecondary() {
 		v.log.Info("Requeuing until VM cleanup is complete")
+		setVRGAutoCleanupCondition(&v.instance.Status.Conditions,
+			v.instance.Status.ObservedGeneration, metav1.ConditionTrue,
+			VRGConditionReasonAutoCleanupProgressing, "VM resource cleanup is in progress")
 
 		return true
 	}
@@ -2937,6 +2923,18 @@ func (v *VRGInstance) isResourceConflict() bool {
 	return false
 }
 
+func (v *VRGInstance) IsVMAutoCleanUpNotFeasible() bool {
+	autoCleanupCondition := rmnutil.FindCondition(v.instance.Status.Conditions, VRGConditionTypeAutoCleanup)
+	if autoCleanupCondition.Status == metav1.ConditionFalse &&
+		autoCleanupCondition.Reason == VRGConditionReasonAutoCleanupNotFeasible {
+		v.log.Info("Automated cleanup of VM resource not feasible, skipping further processing.")
+
+		return true
+	}
+
+	return false
+}
+
 //  1. If VM resource cleanup is in progress, requeue for reconciliation
 //  2. If protected VMs are not found in protected NS, consider VM cleanup complete
 //  3. Validates if all protected VMs owns PVCs from the lis tof all the protected volumes directly or indirectly
@@ -2947,10 +2945,6 @@ func (v *VRGInstance) isResourceConflict() bool {
 func (v *VRGInstance) ShouldCleanupVMForSecondary() bool {
 	v.log.Info(
 		"DR action progressing",
-		"component", "VRGController",
-		"action", "reconcile",
-		"vrgName", v.instance.GetName(),
-		"namespace", v.instance.GetNamespace(),
 		"desiredState", v.instance.Spec.ReplicationState,
 		"currentState", v.instance.Status.State,
 	)
@@ -2969,6 +2963,9 @@ func (v *VRGInstance) ShouldCleanupVMForSecondary() bool {
 			"vmList", vmList,
 			"namespaceList", vmNamespaceList,
 		)
+		setVRGAutoCleanupCondition(&v.instance.Status.Conditions,
+			v.instance.Status.ObservedGeneration, metav1.ConditionTrue,
+			VRGConditionReasonAutoCleanupCompleted, "VM resource cleanup completed")
 
 		return false
 	}
@@ -2978,6 +2975,10 @@ func (v *VRGInstance) ShouldCleanupVMForSecondary() bool {
 	yes = v.validatePVCOwnershipOnVMs()
 	if !yes {
 		v.log.Info("VMs not eligible for automated cleanup")
+		setVRGAutoCleanupCondition(&v.instance.Status.Conditions,
+			v.instance.Status.ObservedGeneration, metav1.ConditionFalse,
+			VRGConditionReasonAutoCleanupNotFeasible,
+			"skipping automatic cleanup; protected resources not fully VM-owned.")
 
 		return yes
 	}
@@ -2989,13 +2990,9 @@ func (v *VRGInstance) ShouldCleanupVMForSecondary() bool {
 		v.log.Error(err, "Failed to delete VMs",
 			"vmList", vmList,
 		)
-
-		// return false
 	}
 
 	return true
-
-	// return false
 }
 
 // pvcProcessResult captures the decision for a single PVC.
@@ -3009,8 +3006,6 @@ type pvcProcessResult struct {
 // or decides to skip/retry cleanup based on current state.
 func (v *VRGInstance) validatePVCOwnershipOnVMs() bool {
 	protectedPVCs := v.collectProtectedPVCs()
-	protectedVMs := v.instance.Spec.KubeObjectProtection.RecipeParameters[recipecore.VMList]
-	protectedVMSet := toSet(protectedVMs)
 
 	// Map PVC name → VM for patching later
 	pvcToVM := make(map[string]*metav1.PartialObjectMetadata)
@@ -3026,7 +3021,7 @@ func (v *VRGInstance) validatePVCOwnershipOnVMs() bool {
 			continue
 		}
 
-		res := v.verifyVMPVCOwnershipAndUsage(&protectedPVCs[i], protectedVMSet)
+		res := v.verifyVMPVCOwnershipAndUsage(&protectedPVCs[i])
 		if res.skip {
 			skipCleanup = true
 
@@ -3049,10 +3044,6 @@ func (v *VRGInstance) validatePVCOwnershipOnVMs() bool {
 		return false
 	}
 
-	// Patch PVCs outside the loop
-	if v.patchPVCsOwnerRefs(pvcToVM) {
-		retryCleanup = true
-	}
 	// return true if no retry needed, return false if retry required
 	return !retryCleanup
 }
@@ -3068,39 +3059,17 @@ func (v *VRGInstance) collectProtectedPVCs() []corev1.PersistentVolumeClaim {
 
 // verifyVMPVCOwnershipAndUsage decides what to do with a single PVC:
 // - If it already has an OwnerReference, validate it.
-// - Else, check if used by virt-launcher, and whether VM is protected.
 // Returns mapping info or flags indicating skip/retry.
 func (v *VRGInstance) verifyVMPVCOwnershipAndUsage(
 	pvc *corev1.PersistentVolumeClaim,
-	protectedVMSet map[string]struct{},
 ) pvcProcessResult {
 	log := logWithPvcName(v.log, pvc)
 
-	if len(pvc.OwnerReferences) > 0 {
-		return v.handleExistingOwnerRef(pvc, log)
-	}
-
-	vm, decision := v.resolveOwnerFromVirtLauncher(pvc, log)
-	if decision.skip || decision.retry || vm == nil {
-		return decision
-	}
-
-	// 3) Ensure VM is among protected VMs; else skip cleanup.
-	if !v.isProtectedVM(vm.GetName(), protectedVMSet) {
-		log.Info("Skipping cleanup, PVC not used by protected VM", "pvc", pvc.Name, "vm", vm.GetName())
-
+	if len(pvc.OwnerReferences) == 0 {
 		return pvcProcessResult{skip: true}
 	}
 
-	// 4) Success: return VM metadata for patching.
-	pom, ok := vm.(*metav1.PartialObjectMetadata)
-	if !ok {
-		log.Info("VirtualMachine(VM) map function received non-VM resource")
-
-		return pvcProcessResult{}
-	}
-
-	return pvcProcessResult{vm: pom}
+	return v.handleExistingOwnerRef(pvc, log)
 }
 
 // handleExistingOwnerRef validates PVC ownerReferences chain and returns skip on invalid.
@@ -3130,67 +3099,6 @@ func (v *VRGInstance) handleExistingOwnerRef(
 	}
 
 	return pvcProcessResult{vm: pom}
-}
-
-// resolveOwnerFromVirtLauncher tries to map PVC usage to a virt-launcher pod's VM.
-func (v *VRGInstance) resolveOwnerFromVirtLauncher(
-	pvc *corev1.PersistentVolumeClaim,
-	log logr.Logger,
-) (client.Object, pvcProcessResult) {
-	ownerVMMetadata, err := rmnutil.IsUsedByVirtLauncherPod(v.ctx, v.reconciler.Client, pvc, log)
-	if err != nil {
-		// Transient resolution error → ask for retry
-		return nil, pvcProcessResult{retry: true}
-	}
-
-	if ownerVMMetadata == nil {
-		// No virt-launcher usage found → manual cleanup
-		return nil, pvcProcessResult{skip: true}
-	}
-
-	// Ensure the reported object is a VM PartialObjectMetadata
-	vm, ok := ownerVMMetadata.(*metav1.PartialObjectMetadata)
-	if !ok {
-		log.Info("VirtualMachine(VM) map function received non-VM resource")
-
-		return nil, pvcProcessResult{}
-	}
-
-	return vm, pvcProcessResult{}
-}
-
-// isProtectedVM checks membership in the protected set.
-func (v *VRGInstance) isProtectedVM(vmName string, protectedVMSet map[string]struct{}) bool {
-	_, ok := protectedVMSet[vmName]
-
-	return ok
-}
-
-// patchPVCsOwnerRefs applies VM OwnerReference to PVCs and returns true if any patch failed.
-func (v *VRGInstance) patchPVCsOwnerRefs(pvcToVM map[string]*metav1.PartialObjectMetadata) bool {
-	var patchError bool
-
-	for pvcName, vm := range pvcToVM {
-		err := rmnutil.UpdatePvcWithVMOwnerRef(v.ctx, v.reconciler.Client, vm, pvcName, vm.Namespace, v.log)
-		if err != nil {
-			v.log.Error(err, "Failed to patch PVC owner reference",
-				"pvcName", pvcName,
-				"vm", vm.GetName())
-
-			patchError = true
-		}
-	}
-
-	return patchError
-}
-
-func toSet(items []string) map[string]struct{} {
-	m := make(map[string]struct{}, len(items))
-	for _, it := range items {
-		m[it] = struct{}{}
-	}
-
-	return m
 }
 
 // skip VM cleanup if cleanup is already in progress or cleanup just completed.
