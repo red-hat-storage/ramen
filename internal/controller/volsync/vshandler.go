@@ -266,7 +266,7 @@ func (v *VSHandler) createOrUpdateRD(
 
 	rd := &volsyncv1alpha1.ReplicationDestination{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      getReplicationDestinationName(rdSpec.ProtectedPVC.Name),
+			Name:      util.GetReplicationDestinationName(rdSpec.ProtectedPVC.Name),
 			Namespace: rdSpec.ProtectedPVC.Namespace,
 		},
 	}
@@ -580,7 +580,7 @@ func (v *VSHandler) resolveRemoteAddress(rsSpec ramendrv1alpha1.VolSyncReplicati
 	if util.IsSubmarinerEnabled(v.owner.GetAnnotations()) {
 		// Remote service address created for the ReplicationDestination on the secondary
 		// The secondary namespace will be the same as primary namespace so use the vrg.Namespace
-		remoteAddress := getRemoteServiceNameForRDFromPVCName(rsSpec.ProtectedPVC.Name, rsSpec.ProtectedPVC.Namespace)
+		remoteAddress := util.GetRemoteServiceNameForRDFromPVCName(rsSpec.ProtectedPVC.Name, rsSpec.ProtectedPVC.Namespace)
 		v.log.Info("Using Submariner remote address", "remoteAddress", remoteAddress)
 
 		return remoteAddress, nil
@@ -1338,7 +1338,7 @@ func (v *VSHandler) DeleteRD(pvcName string, pvcNamespace string) error {
 	for i := range currentRDListByOwner.Items {
 		rd := currentRDListByOwner.Items[i]
 
-		if rd.GetName() == getReplicationDestinationName(pvcName) {
+		if rd.GetName() == util.GetReplicationDestinationName(pvcName) {
 			if v.IsCopyMethodDirect() {
 				err := v.deleteLocalRDAndRS(&rd)
 				if err != nil {
@@ -1428,7 +1428,7 @@ func (v *VSHandler) deleteLocalRDAndRS(rd *volsyncv1alpha1.ReplicationDestinatio
 
 	lrs := &volsyncv1alpha1.ReplicationSource{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      getLocalReplicationName(rd.GetName()),
+			Name:      util.GetLocalReplicationName(rd.GetName()),
 			Namespace: rd.GetNamespace(),
 		},
 	}
@@ -1439,7 +1439,7 @@ func (v *VSHandler) deleteLocalRDAndRS(rd *volsyncv1alpha1.ReplicationDestinatio
 	}, lrs)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return v.DeleteLocalRD(getLocalReplicationName(rd.GetName()), rd.GetNamespace())
+			return v.DeleteLocalRD(util.GetLocalReplicationName(rd.GetName()), rd.GetNamespace())
 		}
 
 		return err
@@ -1480,7 +1480,7 @@ func (v *VSHandler) CleanupRDNotInSpecList(rdSpecList []ramendrv1alpha1.VolSyncR
 		foundInSpecList := false
 
 		for _, rdSpec := range rdSpecList {
-			if rd.GetName() == getReplicationDestinationName(rdSpec.ProtectedPVC.Name) &&
+			if rd.GetName() == util.GetReplicationDestinationName(rdSpec.ProtectedPVC.Name) &&
 				rd.GetNamespace() == rdSpec.ProtectedPVC.Namespace {
 				foundInSpecList = true
 
@@ -1523,7 +1523,8 @@ func (v *VSHandler) ReconcileServiceExportForRD(rd *volsyncv1alpha1.ReplicationD
 	svcExport := &unstructured.Unstructured{}
 	svcExport.Object = map[string]interface{}{
 		"metadata": map[string]interface{}{
-			"name":      getLocalServiceNameForRD(rd.GetName()), // Get name of the local service (this needs to be exported)
+			// Get name of the local service (this needs to be exported)
+			"name":      util.GetLocalServiceNameForRD(rd.GetName()),
 			"namespace": rd.GetNamespace(),
 		},
 	}
@@ -1775,7 +1776,7 @@ func (v *VSHandler) rollbackToLastSnapshot(rdSpec ramendrv1alpha1.VolSyncReplica
 
 	v.log.Info(fmt.Sprintf("Rollback to the last snapshot %s for pvc %s", snapshotRef.Name, rdSpec.ProtectedPVC.Name))
 	// 1. Pause the main RD. Any inprogress sync will be terminated.
-	rd, err := v.pauseRD(getReplicationDestinationName(rdSpec.ProtectedPVC.Name), rdSpec.ProtectedPVC.Namespace)
+	rd, err := v.pauseRD(util.GetReplicationDestinationName(rdSpec.ProtectedPVC.Name), rdSpec.ProtectedPVC.Namespace)
 	if err != nil {
 		return err
 	}
@@ -1787,7 +1788,7 @@ func (v *VSHandler) rollbackToLastSnapshot(rdSpec ramendrv1alpha1.VolSyncReplica
 	}
 
 	lrd, err := GetRD(v.ctx, v.client,
-		getLocalReplicationName(rdSpec.ProtectedPVC.Name), rdSpec.ProtectedPVC.Namespace, v.log)
+		util.GetLocalReplicationName(rdSpec.ProtectedPVC.Name), rdSpec.ProtectedPVC.Namespace, v.log)
 	if err != nil {
 		return err
 	}
@@ -2294,32 +2295,8 @@ func isLatestImageReady(latestImage *corev1.TypedLocalObjectReference) bool {
 	return true
 }
 
-func getReplicationDestinationName(pvcName string) string {
-	return pvcName // Use PVC name as name of ReplicationDestination
-}
-
 func getReplicationSourceName(pvcName string) string {
 	return pvcName // Use PVC name as name of ReplicationSource
-}
-
-func getLocalReplicationName(pvcName string) string {
-	return pvcName + "-local" // Use PVC name as name plus -local for local RD and RS
-}
-
-// Service name that VolSync will create locally in the same namespace as the ReplicationDestination
-func getLocalServiceNameForRDFromPVCName(pvcName string) string {
-	return getLocalServiceNameForRD(getReplicationDestinationName(pvcName))
-}
-
-func getLocalServiceNameForRD(rdName string) string {
-	// This is the name VolSync will use for the service
-	return util.GetServiceName("volsync-rsync-tls-dst-", rdName)
-}
-
-// This is the remote service name that can be accessed from another cluster.  This assumes submariner and that
-// a ServiceExport is created for the service on the cluster that has the ReplicationDestination
-func getRemoteServiceNameForRDFromPVCName(pvcName, rdNamespace string) string {
-	return fmt.Sprintf("%s.%s.svc.clusterset.local", getLocalServiceNameForRDFromPVCName(pvcName), rdNamespace)
 }
 
 func getKindAndName(scheme *runtime.Scheme, obj client.Object) string {
@@ -2387,7 +2364,7 @@ func (v *VSHandler) reconcileLocalRD(rdSpec ramendrv1alpha1.VolSyncReplicationDe
 
 	lrd := &volsyncv1alpha1.ReplicationDestination{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      getLocalReplicationName(rdSpec.ProtectedPVC.Name),
+			Name:      util.GetLocalReplicationName(rdSpec.ProtectedPVC.Name),
 			Namespace: rdSpec.ProtectedPVC.Namespace,
 		},
 	}
@@ -2466,7 +2443,7 @@ func (v *VSHandler) reconcileLocalRS(rd *volsyncv1alpha1.ReplicationDestination,
 
 	lrs := &volsyncv1alpha1.ReplicationSource{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      getLocalReplicationName(rsSpec.ProtectedPVC.Name),
+			Name:      util.GetLocalReplicationName(rsSpec.ProtectedPVC.Name),
 			Namespace: rsSpec.ProtectedPVC.Namespace,
 		},
 	}
@@ -2578,7 +2555,7 @@ func (v *VSHandler) setupLocalRS(rd *volsyncv1alpha1.ReplicationDestination,
 
 	lrs := &volsyncv1alpha1.ReplicationSource{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      getLocalReplicationName(rd.GetName()),
+			Name:      util.GetLocalReplicationName(rd.GetName()),
 			Namespace: rd.GetNamespace(),
 		},
 	}
@@ -2724,7 +2701,7 @@ func GetRD(ctx context.Context,
 
 	err := k8sClient.Get(ctx,
 		types.NamespacedName{
-			Name:      getReplicationDestinationName(name),
+			Name:      util.GetReplicationDestinationName(name),
 			Namespace: namespace,
 		}, rdInst)
 	if err != nil {
