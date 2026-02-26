@@ -1541,7 +1541,6 @@ func (v *VSHandler) DeleteRD(pvcName, pvcNamespace string, skipPVCDisownership b
 
 	for i := range currentRDListByOwner.Items {
 		rd := currentRDListByOwner.Items[i]
-
 		if rd.GetName() == expectedRDName {
 			if err := v.cleanupRD(&rd, pvcName, pvcNamespace, skipPVCDisownership); err != nil {
 				return err
@@ -1870,7 +1869,7 @@ func (v *VSHandler) handlePVCNotReady(
 	return existingRS, validateErr
 }
 
-//nolint:cyclop,funlen,gocognit
+//nolint:cyclop
 func (v *VSHandler) EnsurePVCforDirectCopy(ctx context.Context,
 	rdSpec ramendrv1alpha1.VolSyncReplicationDestinationSpec,
 ) error {
