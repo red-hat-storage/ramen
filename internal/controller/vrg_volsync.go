@@ -333,9 +333,17 @@ func (v *VRGInstance) reconcileCGMembership() (map[string]struct{}, bool, error)
 
 	rdSpecsUsingCG := make(map[string]struct{})
 
-	for _, rdSpec := range v.instance.Spec.VolSync.RDSpec {
-		cgLabelVal, ok := rdSpec.ProtectedPVC.Labels[ConsistencyGroupLabel]
-		if ok && util.IsCGEnabled(v.instance.Annotations) {
+//<<<<<<< HEAD
+//	for _, rdSpec := range v.instance.Spec.VolSync.RDSpec {
+//		cgLabelVal, ok := rdSpec.ProtectedPVC.Labels[ConsistencyGroupLabel]
+//		if ok && util.IsCGEnabled(v.instance.Annotations) {
+//=======
+	for index := range v.instance.Spec.VolSync.RDSpec {
+		rdSpec := v.instance.Spec.VolSync.RDSpec[index]
+
+		cgLabelVal, ok := rdSpec.ProtectedPVC.Labels[util.ConsistencyGroupLabel]
+		if ok && util.IsCGEnabledForVolSync(v.ctx, v.reconciler.APIReader) {
+//>>>>>>> 6f92cd7e (Propagate custom SCCs to DataMover in CG via DRPC/VRG)
 			v.log.Info("RDSpec contains the CG label from the primary cluster", "Label", cgLabelVal)
 			// Get the CG label value for this cluster
 			cgLabelVal, err := v.getCGLabelValue(rdSpec.ProtectedPVC.StorageClassName,
@@ -348,6 +356,9 @@ func (v *VRGInstance) reconcileCGMembership() (map[string]struct{}, bool, error)
 
 			key := fmt.Sprintf("%s-%s", rdSpec.ProtectedPVC.Namespace, rdSpec.ProtectedPVC.Name)
 			rdSpecsUsingCG[key] = struct{}{}
+
+			rdSpec.MoverConfig = util.GetRSMoverConfig(rdSpec.ProtectedPVC.Name, rdSpec.ProtectedPVC.Namespace,
+				v.instance.Spec.VolSync.MoverConfig)
 
 			groups[cgLabelVal] = append(groups[cgLabelVal], rdSpec)
 		}

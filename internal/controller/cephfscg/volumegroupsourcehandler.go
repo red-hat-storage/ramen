@@ -433,14 +433,32 @@ func (h *volumeGroupSourceHandler) CreateOrUpdateReplicationSourceForRestoredPVC
 		restoredPVC := tmpRestoredPVC
 		logger.Info("Create replication source for restored PVC", "RestoredPVC", restoredPVC.RestoredPVCName)
 
-		replicationSourceNamepspace := h.VolumeGroupSnapshotNamespace
+//<<<<<<< HEAD
+//		replicationSourceNamepspace := h.VolumeGroupSnapshotNamespace
+//		replicationSource := &volsyncv1alpha1.ReplicationSource{
+//			ObjectMeta: metav1.ObjectMeta{
+//				Name:      restoredPVC.SourcePVCName,
+//				Namespace: replicationSourceNamepspace,
+//			},
+//		}
+//		rdService := getRemoteServiceNameForRDFromPVCName(restoredPVC.SourcePVCName, replicationSourceNamepspace)
+//=======
+		originalPVCName := strings.TrimSuffix(restoredPVC.SourcePVCName, util.SuffixForFinalsyncPVC)
+
+		replicationSourceNamespace := h.VolumeGroupSnapshotNamespace
 		replicationSource := &volsyncv1alpha1.ReplicationSource{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      restoredPVC.SourcePVCName,
-				Namespace: replicationSourceNamepspace,
+				Name:      originalPVCName,
+				Namespace: replicationSourceNamespace,
 			},
 		}
-		rdService := getRemoteServiceNameForRDFromPVCName(restoredPVC.SourcePVCName, replicationSourceNamepspace)
+
+		rdService, err := h.resolveRDService(originalPVCName, restoredPVC.RestoredPVCName,
+			vrg, replicationSourceNamespace, isSubmarinerEnabled, logger)
+		if err != nil {
+			return nil, false, err
+		}
+//>>>>>>> 6f92cd7e (Propagate custom SCCs to DataMover in CG via DRPC/VRG)
 
 		op, err := ctrlutil.CreateOrUpdate(ctx, h.Client, replicationSource, func() error {
 			if err := ctrl.SetControllerReference(owner, replicationSource, h.Client.Scheme()); err != nil {
@@ -462,6 +480,14 @@ func (h *volumeGroupSourceHandler) CreateOrUpdateReplicationSourceForRestoredPVC
 
 				KeySecret: &h.VolsyncKeySecretName,
 				Address:   &rdService,
+			}
+
+			moverConfigVal := util.GetRSMoverConfig(originalPVCName, replicationSourceNamespace, vrg.Spec.VolSync.MoverConfig)
+			if moverConfigVal != nil {
+				replicationSource.Spec.RsyncTLS.MoverConfig = volsyncv1alpha1.MoverConfig{
+					MoverSecurityContext: moverConfigVal.MoverSecurityContext,
+					MoverServiceAccount:  moverConfigVal.MoverServiceAccount,
+				}
 			}
 
 			return nil
