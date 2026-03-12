@@ -1638,13 +1638,8 @@ func (v *VSHandler) EnsurePVCforDirectCopy(ctx context.Context,
 
 		pvc.Spec.Resources.Requests = rdSpec.ProtectedPVC.Resources.Requests
 
-		if pvc.Labels == nil {
-			pvc.Labels = rdSpec.ProtectedPVC.Labels
-		} else {
-			for key, val := range rdSpec.ProtectedPVC.Labels {
-				pvc.Labels[key] = val
-			}
-		}
+		util.SyncPVCLabels(pvc, rdSpec.ProtectedPVC.Labels)
+		util.SyncPVCAnnotations(pvc, rdSpec.ProtectedPVC.Annotations)
 
 		return nil
 	})
@@ -2867,6 +2862,9 @@ func (v *VSHandler) addBackOCMAnnotationsAndUpdate(obj client.Object, annotation
 			updatedAnnotations[key] = val
 		}
 	}
+
+	// Clean up the managed keys marker since we're switching clusters
+	delete(updatedAnnotations, util.ManagedAnnotationKeysMarker)
 
 	obj.SetAnnotations(updatedAnnotations)
 
