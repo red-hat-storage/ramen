@@ -7,11 +7,13 @@ import logging
 import os
 import platform
 import sys
+import tempfile
 import time
 
 from packaging.version import Version
 
 from drenv import commands
+from drenv import config
 from drenv import containerd
 from drenv import patch
 from drenv import registry
@@ -370,12 +372,22 @@ def _configure_containerd(profile):
 
 def _copy_registry_mirrors(name):
     """
-    Copy containerd registry mirror configuration to the cluster.
+    Generate and copy registry mirror configuration to the cluster.
+
+    The registry host defaults to "host.minikube.internal" which works for
+    minikube clusters with default podman machine. Override with registry_host
+    in ~/.config/drenv/config.yaml if you use another podman VM.
     """
-    src = _package_path("containerd", "certs.d")
-    dst = "/etc/containerd/certs.d"
-    logging.debug("[%s] Copying registry mirror configuration", name)
-    _copy_dir(name, src, dst)
+    cfg = config.read()
+    registry_host = cfg.get(config.REGISTRY_HOST, "host.minikube.internal")
+    logging.debug(
+        "[%s] Copying registry mirror configuration (host=%s)",
+        name,
+        registry_host,
+    )
+    with tempfile.TemporaryDirectory(prefix="drenv-certs-") as tmpdir:
+        containerd.create_registry_mirrors(tmpdir, registry_host)
+        _copy_dir(name, tmpdir, "/etc/containerd/certs.d")
 
 
 def _copy_dir(name, src, dst):
@@ -391,35 +403,28 @@ def _copy_dir(name, src, dst):
     ip = _run("ip", profile=name).strip()
     key = _run("ssh-key", profile=name).strip()
 
-    commands.pipeline(
-        [
-            "tar",
-            "--directory",
-            src,
-            "--create",
-            "--file=-",
-            ".",
-        ],
-        [
-            "ssh",
-            f"-oIdentityFile={key}",
-            "-oUser=docker",
-            "-oStrictHostKeyChecking=no",
-            "-oUserKnownHostsFile=/dev/null",
-            "-oLogLevel=ERROR",
-            ip,
-            # ssh joins arguments with spaces and runs through remote shell.
-            # Using a single string to make the remote command explicit.
-            f"sudo tar --directory {dst} --extract --file=-",
-        ],
-    )
-
-
-def _package_path(*names):
-    """
-    Return a path to a file or directory in this package.
-    """
-    return os.path.join(os.path.dirname(__file__), *names)
+    tar_create = [
+        "tar",
+        "--directory",
+        src,
+        "--create",
+        "--file=-",
+        ".",
+    ]
+    tar_extract = [
+        "ssh",
+        f"-oIdentityFile={key}",
+        "-oUser=docker",
+        "-oStrictHostKeyChecking=no",
+        "-oUserKnownHostsFile=/dev/null",
+        "-oLogLevel=ERROR",
+        ip,
+        # ssh joins arguments with spaces and runs through remote shell.
+        # Using a single string to make the remote command explicit.
+        f"sudo tar --directory {dst} --extract --file=-",
+    ]
+    logging.debug("[%s] Running %s | %s", name, tar_create, tar_extract)
+    commands.pipeline(tar_create, tar_extract)
 
 
 def _write_file(path, data):
