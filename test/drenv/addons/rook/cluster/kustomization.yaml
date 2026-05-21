@@ -4,7 +4,7 @@
 # yamllint disable rule:line-length
 ---
 resources:
-  - https://raw.githubusercontent.com/rook/rook/release-1.18/deploy/examples/cluster-test.yaml
+  - https://raw.githubusercontent.com/rook/rook/release-1.19/deploy/examples/cluster-test.yaml
 patches:
   - target:
       kind: CephCluster
@@ -29,3 +29,7 @@ patches:
           enabled: true
           periodicity: daily
           maxLogSize: 50M
+      # Last ceph image that worked on arm64. Since v20.2.1 rbd-mirror is broken on arm64.
+      - op: replace
+        path: /spec/cephVersion/image
+        value: quay.io/ceph/ceph:v20.2.0
