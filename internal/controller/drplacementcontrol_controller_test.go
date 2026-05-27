@@ -2075,9 +2075,14 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 		})
 
 		When("Deleting DRPC", func() {
+			var drpolicyName string
+
 			It("Should delete VRG and NS MWs and MCVs from Primary (East1ManagedCluster)", func() {
 				// ----------------------------- DELETE DRPC from PRIMARY --------------------------------------
 				By("\n\n*** DELETE DRPC ***\n\n")
+				// Save the DRPolicy name before deleting DRPC
+				drpolicyName = drpc.Spec.DRPolicyRef.Name
+
 				Expect(getManifestWorkCount(East1ManagedCluster)).Should(BeElementOf(3, 4)) // DRCluster + VRG MW
 				deleteDRPC()
 				waitForCompletion("deleted")
@@ -2087,7 +2092,7 @@ var _ = Describe("DRPlacementControl Reconciler", func() {
 			})
 			It("should delete the DRPC causing its referenced drpolicy to be deleted"+
 				" by drpolicy controller since no DRPCs reference it anymore", func() {
-				ensureDRPolicyIsDeleted(drpc.Spec.DRPolicyRef.Name)
+				ensureDRPolicyIsDeleted(drpolicyName)
 			})
 		})
 		Specify("delete drclusters", func() {
@@ -2882,8 +2887,10 @@ func getVRGFromManifestWork(clusterNamespace string) (*rmn.VolumeReplicationGrou
 	mwName := rmnutil.ManifestWorkName(DRPCCommonName, DefaultDRPCNamespace, rmnutil.MWTypeVRG)
 	mw := &ocmworkv1.ManifestWork{}
 
-	err := k8sClient.Get(context.TODO(), types.NamespacedName{Name: mwName, Namespace: clusterNamespace}, mw)
-	Expect(err).NotTo(HaveOccurred())
+	Eventually(func() error {
+		return k8sClient.Get(context.TODO(), types.NamespacedName{Name: mwName, Namespace: clusterNamespace}, mw)
+	}, timeout, interval).Should(Succeed(),
+		"timed out waiting for VRG ManifestWork %s in namespace %s", mwName, clusterNamespace)
 
 	return rmnutil.ExtractVRGFromManifestWork(mw)
 }

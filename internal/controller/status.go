@@ -59,6 +59,13 @@ const (
 	// Indicates whether all VRGs sharing the same global VGR label have
 	// reached the desired replication state.
 	VRGConditionTypeGlobalState = "GlobalState"
+
+	// Indicates the status of hook execution in recipes.
+	// This condition helps identify hook failures separately from other kube object protection issues.
+	VRGConditionTypeHooksReady = "HooksReady"
+	// Indicates destination volume info is available from the VolumeReplication resource.
+	// Only set when VRs report this condition; absent means not applicable.
+	VRGConditionTypeDestinationInfoAvailable = "DestinationInfoAvailable"
 )
 
 // VRG condition reasons
@@ -102,6 +109,10 @@ const (
 
 	ConditionReasonConsensusReached    = "ConsensusReached"
 	ConditionReasonConsensusNotReached = "ConsensusNotReached"
+
+	// Hook-specific condition reasons for better visibility of hook failures
+	VRGConditionReasonHookExecuted = "HookExecuted"
+	VRGConditionReasonHookFailed   = "HookFailed"
 )
 
 const (
@@ -546,4 +557,26 @@ func setVRGAutoCleanupCondition(conditions *[]metav1.Condition, observedGenerati
 		Message:            message,
 	}
 	util.SetStatusCondition(conditions, *autoCleanupCondition)
+}
+
+// sets conditions when hook execution succeeds
+func setVRGHookExecutedCondition(conditions *[]metav1.Condition, observedGeneration int64, message string) {
+	util.SetStatusCondition(conditions, metav1.Condition{
+		Type:               VRGConditionTypeHooksReady,
+		Reason:             VRGConditionReasonHookExecuted,
+		ObservedGeneration: observedGeneration,
+		Status:             metav1.ConditionTrue,
+		Message:            message,
+	})
+}
+
+// sets conditions when hook execution fails
+func setVRGHookFailedCondition(conditions *[]metav1.Condition, observedGeneration int64, message string) {
+	util.SetStatusCondition(conditions, metav1.Condition{
+		Type:               VRGConditionTypeHooksReady,
+		Reason:             VRGConditionReasonHookFailed,
+		ObservedGeneration: observedGeneration,
+		Status:             metav1.ConditionFalse,
+		Message:            message,
+	})
 }
