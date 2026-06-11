@@ -692,11 +692,32 @@ func (v *VRGInstance) processVGRAsSecondary(vrNamespacedName types.NamespacedNam
 	return v.createOrUpdateVGR(vrNamespacedName, pvcs, volrep.Secondary, log)
 }
 
+func (v *VRGInstance) labelPVCsWithVGROwner(pvcs []*corev1.PersistentVolumeClaim, vgrName string) error {
+	for idx := range pvcs {
+		pvc := pvcs[idx]
+
+		err := rmnutil.NewResourceUpdater(pvc).
+			AddLabel("volumegroupreplication-owner", vgrName).
+			Update(v.ctx, v.reconciler.Client)
+		if err != nil {
+			return fmt.Errorf("failed to update PVC labels: %w", err)
+		}
+	}
+
+	return nil
+}
+
 //nolint:gocognit,funlen
 func (v *VRGInstance) createOrUpdateVGR(vrNamespacedName types.NamespacedName,
 	pvcs []*corev1.PersistentVolumeClaim, state volrep.ReplicationState, log logr.Logger,
 ) (bool, bool, error) {
 	const requeue = true
+
+	v.log.V(1).Info("create or update VGR", "state", state, "pvcs", len(pvcs))
+
+	if err := v.labelPVCsWithVGROwner(pvcs, vrNamespacedName.Name); err != nil {
+		return requeue, false, err
+	}
 
 	volRep := &volrep.VolumeGroupReplication{}
 
