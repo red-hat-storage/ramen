@@ -25,6 +25,7 @@ import (
 
 	ramendrv1alpha1 "github.com/ramendr/ramen/api/v1alpha1"
 	rameninternalconfig "github.com/ramendr/ramen/internal/config"
+	rmnutil "github.com/ramendr/ramen/internal/controller/util"
 )
 
 const (
@@ -411,7 +412,7 @@ func ConfigMapNew(
 		return nil, fmt.Errorf("config map yaml marshal %w", err)
 	}
 
-	return &corev1.ConfigMap{
+	cm := &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{Kind: "ConfigMap", APIVersion: "v1"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -420,7 +421,11 @@ func ConfigMapNew(
 		Data: map[string]string{
 			ConfigMapRamenConfigKeyName: string(ramenConfigYaml),
 		},
-	}, nil
+	}
+
+	rmnutil.AddLabel(cm, rmnutil.CreatedByRamenLabel, "true")
+
+	return cm, nil
 }
 
 func ConfigMapGet(

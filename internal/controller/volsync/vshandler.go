@@ -17,6 +17,7 @@ import (
 	vgsv1beta1 "github.com/red-hat-storage/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -142,6 +143,21 @@ func (v *VSHandler) GetMoverConfigForPVC(pvcName, pvcNamespace string) *ramendrv
 
 func (v *VSHandler) SetWorkloadStatus(status string) {
 	v.workloadStatus = status
+}
+
+func buildMoverConfig(moverConfigSpec *ramendrv1alpha1.MoverConfig) volsyncv1alpha1.MoverConfig {
+	mc := volsyncv1alpha1.MoverConfig{
+		MoverPodLabels: map[string]string{
+			util.CreatedByRamenLabel: "true",
+		},
+	}
+
+	if moverConfigSpec != nil {
+		mc.MoverSecurityContext = moverConfigSpec.MoverSecurityContext
+		mc.MoverServiceAccount = moverConfigSpec.MoverServiceAccount
+	}
+
+	return mc
 }
 
 // returns replication destination only if create/update is successful and the RD is considered available.
@@ -398,14 +414,7 @@ func (v *VSHandler) createOrUpdateRD(
 		util.AddAnnotation(rd, OwnerNameAnnotation, v.owner.GetName())
 		util.AddAnnotation(rd, OwnerNamespaceAnnotation, v.owner.GetNamespace())
 
-		moverConfig := volsyncv1alpha1.MoverConfig{}
-
-		if moverConfigSpec != nil {
-			moverConfig = volsyncv1alpha1.MoverConfig{
-				MoverSecurityContext: moverConfigSpec.MoverSecurityContext,
-				MoverServiceAccount:  moverConfigSpec.MoverServiceAccount,
-			}
-		}
+		moverConfig := buildMoverConfig(moverConfigSpec)
 
 		if util.IsDiffSyncEnabled(v.owner.GetAnnotations()) {
 			params := map[string]string{
@@ -674,13 +683,7 @@ func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSo
 			return err
 		}
 
-		moverConfig := &volsyncv1alpha1.MoverConfig{}
-		if moverConfigSpec != nil {
-			moverConfig = &volsyncv1alpha1.MoverConfig{
-				MoverSecurityContext: moverConfigSpec.MoverSecurityContext,
-				MoverServiceAccount:  moverConfigSpec.MoverServiceAccount,
-			}
-		}
+		moverConfig := buildMoverConfig(moverConfigSpec)
 
 		if util.IsDiffSyncEnabled(v.owner.GetAnnotations()) {
 			rs.Spec.External = &volsyncv1alpha1.ReplicationSourceExternalSpec{
@@ -708,7 +711,7 @@ func (v *VSHandler) createOrUpdateRS(rsSpec ramendrv1alpha1.VolSyncReplicationSo
 					StorageClassName:        rsSpec.ProtectedPVC.StorageClassName,
 					AccessModes:             rsSpec.ProtectedPVC.AccessModes,
 				},
-				MoverConfig: *moverConfig,
+				MoverConfig: moverConfig,
 			}
 		}
 
@@ -1867,7 +1870,63 @@ func (v *VSHandler) ReconcileServiceExportForRD(rd *volsyncv1alpha1.ReplicationD
 		return fmt.Errorf("error creating or updating ServiceExport (%w)", err)
 	}
 
+	v.ensureVolSyncServiceLabels(serviceName, rd.GetNamespace())
+
 	return nil
+}
+
+func (v *VSHandler) ensureVolSyncServiceLabels(serviceName, namespace string) {
+	svc := &corev1.Service{}
+
+	err := v.client.Get(v.ctx, types.NamespacedName{Name: serviceName, Namespace: namespace}, svc)
+	if err != nil {
+		v.log.V(1).Info("VolSync Service not found yet, skipping label", "serviceName", serviceName)
+
+		return
+	}
+
+	err = util.NewResourceUpdater(svc).
+		AddLabel(util.CreatedByRamenLabel, "transitive").
+		Update(v.ctx, v.client)
+	if err != nil {
+		v.log.V(1).Info("Failed to label VolSync Service", "serviceName", serviceName, "error", err)
+	}
+
+	ep := &corev1.Endpoints{}
+
+	err = v.client.Get(v.ctx, types.NamespacedName{Name: serviceName, Namespace: namespace}, ep)
+	if err != nil {
+		v.log.V(1).Info("VolSync Endpoints not found yet, skipping label", "serviceName", serviceName)
+	} else {
+		err = util.NewResourceUpdater(ep).
+			AddLabel(util.CreatedByRamenLabel, "transitive").
+			Update(v.ctx, v.client)
+		if err != nil {
+			v.log.V(1).Info("Failed to label VolSync Endpoints", "serviceName", serviceName, "error", err)
+		}
+	}
+
+	epSliceList := &discoveryv1.EndpointSliceList{}
+
+	err = v.client.List(v.ctx, epSliceList,
+		client.InNamespace(namespace),
+		client.MatchingLabels{"kubernetes.io/service-name": serviceName},
+	)
+	if err != nil {
+		v.log.V(1).Info("Failed to list EndpointSlices, skipping label", "serviceName", serviceName)
+
+		return
+	}
+
+	for i := range epSliceList.Items {
+		err = util.NewResourceUpdater(&epSliceList.Items[i]).
+			AddLabel(util.CreatedByRamenLabel, "transitive").
+			Update(v.ctx, v.client)
+		if err != nil {
+			v.log.V(1).Info("Failed to label VolSync EndpointSlice",
+				"endpointSlice", epSliceList.Items[i].Name, "error", err)
+		}
+	}
 }
 
 func (v *VSHandler) listRSByOwner(rsNamespace string) (volsyncv1alpha1.ReplicationSourceList, error) {
@@ -2267,6 +2326,7 @@ func (v *VSHandler) validateAndProtectSnapshot(
 	err = updater.AddLabel(util.VRGOwnerNameLabel, v.owner.GetName()).
 		AddLabel(util.VRGOwnerNamespaceLabel, v.owner.GetNamespace()).
 		AddLabel(VolSyncDoNotDeleteLabel, VolSyncDoNotDeleteLabelVal).
+		AddLabel(util.CreatedByRamenLabel, "true").
 		Update(v.ctx, v.client)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add owner/label to snapshot %s (%w)", volSnap.GetName(), err)
@@ -2702,13 +2762,7 @@ func (v *VSHandler) reconcileLocalRD(rdSpec ramendrv1alpha1.VolSyncReplicationDe
 			pvcAccessModes = rdSpec.ProtectedPVC.AccessModes
 		}
 
-		moverConfig := &volsyncv1alpha1.MoverConfig{}
-		if moverConfigSpec != nil {
-			moverConfig = &volsyncv1alpha1.MoverConfig{
-				MoverSecurityContext: moverConfigSpec.MoverSecurityContext,
-				MoverServiceAccount:  moverConfigSpec.MoverServiceAccount,
-			}
-		}
+		moverConfig := buildMoverConfig(moverConfigSpec)
 
 		lrd.Spec.External = nil
 		lrd.Spec.RsyncTLS = &volsyncv1alpha1.ReplicationDestinationRsyncTLSSpec{
@@ -2722,7 +2776,7 @@ func (v *VSHandler) reconcileLocalRD(rdSpec ramendrv1alpha1.VolSyncReplicationDe
 				AccessModes:      pvcAccessModes,
 				DestinationPVC:   &rdSpec.ProtectedPVC.Name,
 			},
-			MoverConfig: *moverConfig,
+			MoverConfig: moverConfig,
 		}
 
 		return nil
@@ -2780,13 +2834,7 @@ func (v *VSHandler) reconcileLocalRS(rd *volsyncv1alpha1.ReplicationDestination,
 
 		lrs.Spec.SourcePVC = pvc.GetName()
 
-		moverConfig := &volsyncv1alpha1.MoverConfig{}
-		if moverConfigSpec != nil {
-			moverConfig = &volsyncv1alpha1.MoverConfig{
-				MoverSecurityContext: moverConfigSpec.MoverSecurityContext,
-				MoverServiceAccount:  moverConfigSpec.MoverServiceAccount,
-			}
-		}
+		moverConfig := buildMoverConfig(moverConfigSpec)
 
 		lrs.Spec.External = nil
 		lrs.Spec.RsyncTLS = &volsyncv1alpha1.ReplicationSourceRsyncTLSSpec{
@@ -2796,7 +2844,7 @@ func (v *VSHandler) reconcileLocalRS(rd *volsyncv1alpha1.ReplicationDestination,
 			ReplicationSourceVolumeOptions: volsyncv1alpha1.ReplicationSourceVolumeOptions{
 				CopyMethod: volsyncv1alpha1.CopyMethodDirect,
 			},
-			MoverConfig: *moverConfig,
+			MoverConfig: moverConfig,
 		}
 
 		return nil
