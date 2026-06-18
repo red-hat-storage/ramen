@@ -131,7 +131,7 @@ func (r *DRPlacementControlReconciler) SetupWithManager(mgr ctrl.Manager, ramenC
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.7.0/pkg/reconcile
 //
-//nolint:funlen,gocognit,gocyclo,cyclop
+//nolint:funlen,gocognit,gocyclo,cyclop,maintidx
 func (r *DRPlacementControlReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := r.Log.WithValues("drpc", req.NamespacedName, "rid", rmnutil.GetRID())
 
@@ -241,61 +241,6 @@ func (r *DRPlacementControlReconciler) Reconcile(ctx context.Context, req ctrl.R
 
 	if requeue {
 		return ctrl.Result{Requeue: true}, r.updateDRPCStatus(ctx, drpc, placementObj, logger, nil)
-	}
-
-	// Check for test failover abort (DryRun changed from true to false while annotation still exists)
-	if drpc.Spec.Action == rmn.ActionFailover &&
-		!drpc.Spec.DryRun &&
-		drpc.Annotations["drplacementcontrol.ramendr.openshift.io/test-failover-dryrun"] == "true" {
-		logger.Info("DryRun aborted, cleaning up VRG from failover cluster", "drpc", drpc.Name)
-
-		// Create MWUtil for VRG deletion
-		mwu := rmnutil.MWUtil{
-			Client:          r.Client,
-			APIReader:       r.APIReader,
-			Ctx:             ctx,
-			Log:             logger,
-			InstName:        drpc.Name,
-			TargetNamespace: drpc.Namespace,
-		}
-
-		// Delete VRG ManifestWork from failover cluster
-		mwName := mwu.BuildManifestWorkName(rmnutil.MWTypeVRG)
-
-		err := mwu.DeleteManifestWork(mwName, drpc.Spec.FailoverCluster)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to delete VRG manifestwork from failover cluster %s: %w",
-				drpc.Spec.FailoverCluster, err)
-		}
-
-		// Check if VRG ManifestWork still exists
-		_, err = mwu.FindManifestWork(mwName, drpc.Spec.FailoverCluster)
-		if err == nil {
-			// VRG ManifestWork still present, requeue until deletion completes
-			logger.Info("VRG ManifestWork deletion in progress, requeuing", "cluster", drpc.Spec.FailoverCluster)
-			//nolint:mnd // 10 second requeue interval for VRG cleanup polling
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
-		}
-
-		// VRG ManifestWork is gone, cleanup finished
-		logger.Info("VRG ManifestWork deleted successfully", "cluster", drpc.Spec.FailoverCluster)
-
-		// Clear annotation
-		delete(drpc.Annotations, "drplacementcontrol.ramendr.openshift.io/test-failover-dryrun")
-
-		if err := r.Client.Update(ctx, drpc); err != nil {
-			return ctrl.Result{}, err
-		}
-
-		// Reset DRPC status
-		drpc.Status.Phase = rmn.Deployed
-		drpc.Status.Progression = rmn.ProgressionCompleted
-
-		if err := r.Status().Update(ctx, drpc); err != nil {
-			return ctrl.Result{}, err
-		}
-
-		return ctrl.Result{}, nil
 	}
 
 	d, err := r.createDRPCInstance(ctx, drPolicy, drpc, placementObj, ramenConfig, logger)
@@ -2185,86 +2130,6 @@ func (r *DRPlacementControlReconciler) removePlacementClusterDecisionForFailover
 
 	r.Log.Info(
 		"Updated PlacementDecision to drop cluster decision for failover",
-		"ClusterName", clusterName,
-		"PlacementDecision", plDecision.Status.Decisions,
-	)
-
-	return nil
-}
-
-func (r *DRPlacementControlReconciler) removeClusterDecisionAfterTestFailover(
-	ctx context.Context,
-	placement interface{},
-	clusterName string,
-) error {
-	switch obj := placement.(type) {
-	case *plrv1.PlacementRule:
-		return r.removePlacementRuleClusterDecisionAfterTestFailover(ctx, obj, clusterName)
-	case *clrapiv1beta1.Placement:
-		return r.removePlacementClusterDecisionAfterTestFailover(ctx, obj, clusterName)
-	default:
-		return fmt.Errorf("failed to find Placement or PlacementRule")
-	}
-}
-
-func (r *DRPlacementControlReconciler) removePlacementRuleClusterDecisionAfterTestFailover(
-	_ context.Context,
-	_ *plrv1.PlacementRule,
-	_ string,
-) error {
-	// PlacementRule support for test failover cleanup is not yet implemented.
-	// PlacementRule is a legacy API; modern clusters use Placement (PlacementDecision).
-	return nil
-}
-
-// removePlacementClusterDecisionAfterTestFailover removes a cluster decision that matches the passed in clusterName
-// after test failover cleanup to restore the placement to its original state.
-func (r *DRPlacementControlReconciler) removePlacementClusterDecisionAfterTestFailover(
-	ctx context.Context,
-	placement *clrapiv1beta1.Placement,
-	clusterName string,
-) error {
-	plDecision, err := r.getPlacementDecisionFromPlacement(placement)
-	if err != nil {
-		return err
-	}
-
-	if plDecision == nil {
-		return nil
-	}
-
-	dropped := false
-	decisions := []clrapiv1beta1.ClusterDecision{}
-
-	for idx := range plDecision.Status.Decisions {
-		if plDecision.Status.Decisions[idx].ClusterName == clusterName {
-			dropped = true
-
-			continue
-		}
-
-		plDecision.Status.Decisions[idx].Reason = plDecision.Status.Decisions[idx].ClusterName
-		decisions = append(decisions, plDecision.Status.Decisions[idx])
-	}
-
-	if !dropped {
-		return nil
-	}
-
-	plDecision.Status = clrapiv1beta1.PlacementDecisionStatus{
-		Decisions: decisions,
-	}
-
-	if err := r.Status().Update(ctx, plDecision); err != nil {
-		return fmt.Errorf(
-			"failed to update placementDecision status to drop cluster decision (%s) for 'test' failover (%w)",
-			clusterName,
-			err,
-		)
-	}
-
-	r.Log.Info(
-		"Updated PlacementDecision to drop cluster decision for 'test' failover",
 		"ClusterName", clusterName,
 		"PlacementDecision", plDecision.Status.Decisions,
 	)
