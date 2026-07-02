@@ -2541,6 +2541,8 @@ func (d *DRPCInstance) ensureNamespaceManifestWork(homeCluster string) error {
 	return nil
 }
 
+// createOrUpdateNamespaces creates namespace ManifestWorks on the peer
+// clusters. See deleteNamespaceManifestWorks for the symmetric delete path.
 func (d *DRPCInstance) createOrUpdateNamespaces(homeCluster string) error {
 	if !isDiscoveredApp(d.instance) {
 		return d.createOrUpdateNSForNonDiscoveredApps(homeCluster)
