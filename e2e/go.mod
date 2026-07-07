@@ -4,7 +4,7 @@ module github.com/ramendr/ramen/e2e
 go 1.23.5
 
 // Recommended version: latest go 1.23 release.
-toolchain go1.23.7
+toolchain go1.23.10
 
 require (
 	github.com/ramendr/ramen/api v0.0.0-20250313143647-8dd671566929
