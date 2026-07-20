@@ -252,6 +252,8 @@ def test_watch_error_missing_executable():
         r"Could not execute: .*'no-such-executable-in-path'.*",
         e.value.error,
     )
+    assert e.value.__cause__ is None
+    assert isinstance(e.value.cause, FileNotFoundError)
 
 
 def test_watch_error_empty():
@@ -399,6 +401,8 @@ def test_run_error_missing_executable():
         r"Could not execute: .*'no-such-executable-in-path'.*",
         e.value.error,
     )
+    assert e.value.__cause__ is None
+    assert isinstance(e.value.cause, FileNotFoundError)
 
 
 def test_run_error_empty():
@@ -409,6 +413,7 @@ def test_run_error_empty():
     assert e.value.exitcode == 1
     assert e.value.output == ""
     assert e.value.error == ""
+    assert e.value.cause is None
 
 
 def test_run_error():
@@ -550,6 +555,16 @@ def test_pipeline_first_fail():
             error="",
         ),
     ]
+
+
+def test_pipeline_error_missing_executable():
+    with pytest.raises(commands.PipelineError) as e:
+        commands.pipeline(
+            ["no-such-executable-in-path"],
+            ["true"],
+        )
+    assert e.value.__cause__ is None
+    assert isinstance(e.value.cause, FileNotFoundError)
 
 
 def test_pipeline_second_fail():

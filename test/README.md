@@ -102,7 +102,7 @@ environment.
    ```
 
    See [Installing Helm](https://helm.sh/docs/intro/install/) for other options
-   Tested with version v4.0.1.
+   Tested with version v4.2.2.
 
 1. Install the `virtctl` tool
 
@@ -143,7 +143,7 @@ environment.
 1. Install the `argocd` tool
 
    ```
-   curl -L -o argocd https://github.com/argoproj/argo-cd/releases/download/v2.11.3/argocd-linux-amd64
+   curl -L -o argocd https://github.com/argoproj/argo-cd/releases/download/v3.4.4/argocd-linux-amd64
    sudo install argocd /usr/local/bin/
    rm argocd
    argocd version --client
