@@ -815,15 +815,8 @@ func (r *DRPlacementControlReconciler) finalizeDRPC(ctx context.Context, drpc *r
 		return err
 	}
 
-	// delete namespace manifestwork
-	for _, drClusterName := range rmnutil.DRPolicyClusterNames(drPolicy) {
-		annotations := make(map[string]string)
-		annotations[DRPCNameAnnotation] = drpc.Name
-		annotations[DRPCNamespaceAnnotation] = drpc.Namespace
-
-		if err := mwu.DeleteNamespaceManifestWork(drClusterName, annotations); err != nil {
-			return err
-		}
+	if err := deleteNamespaceManifestWorks(drpc, drPolicy, mwu, vrgNamespace); err != nil {
+		return err
 	}
 
 	// delete recipe manifestwork
@@ -856,6 +849,32 @@ func (r *DRPlacementControlReconciler) finalizeDRPC(ctx context.Context, drpc *r
 
 	globalActionLabels := GlobalActionLabels(drpc)
 	DeleteGlobalActionMetric(globalActionLabels)
+
+	return nil
+}
+
+// deleteNamespaceManifestWorks deletes namespace ManifestWorks for all
+// clusters in the DRPolicy, handling both discovered and non-discovered apps.
+// See createOrUpdateNamespaces for the symmetric create path.
+func deleteNamespaceManifestWorks(
+	drpc *rmn.DRPlacementControl,
+	drPolicy *rmn.DRPolicy,
+	mwu rmnutil.MWUtil,
+	vrgNamespace string,
+) error {
+	namespaces := []string{vrgNamespace}
+	if isDiscoveredApp(drpc) {
+		namespaces = *drpc.Spec.ProtectedNamespaces
+	}
+
+	for _, ns := range namespaces {
+		for _, clusterName := range rmnutil.DRPolicyClusterNames(drPolicy) {
+			mwName := rmnutil.ManifestWorkName(drpc.Name, ns, rmnutil.MWTypeNS)
+			if err := mwu.DeleteNamespaceManifestWork(mwName, clusterName); err != nil {
+				return err
+			}
+		}
+	}
 
 	return nil
 }
@@ -951,10 +970,9 @@ func (r *DRPlacementControlReconciler) deleteAllManagedClusterViews(
 			return fmt.Errorf("failed to delete VRG MCV %w", err)
 		}
 
-		// Delete MCV for Namespace
-		err = r.MCVGetter.DeleteNamespaceManagedClusterView(drpc.Name, drpc.Namespace, drClusterName, rmnutil.MWTypeNS)
-		if err != nil {
-			return fmt.Errorf("failed to delete namespace MCV %w", err)
+		// Delete MCVs for protected namespaces
+		if err := r.deleteProtectedNamespaceMCVs(drpc, drClusterName); err != nil {
+			return err
 		}
 
 		// Delete MCV for Recipe
@@ -967,6 +985,25 @@ func (r *DRPlacementControlReconciler) deleteAllManagedClusterViews(
 			if err != nil {
 				return fmt.Errorf("failed to delete recipe MCV %w", err)
 			}
+		}
+	}
+
+	return nil
+}
+
+// deleteProtectedNamespaceMCVs deletes MCVs for protected namespaces. These MCVs are created by
+// createOrUpdateNSForDiscoveredApps via GetNSFromManagedCluster, named "{namespace}-ns-mcv" (e.g.,
+// "test-multi-1-ns-mcv"). Does nothing for non-discovered apps.
+func (r *DRPlacementControlReconciler) deleteProtectedNamespaceMCVs(
+	drpc *rmn.DRPlacementControl, clusterName string,
+) error {
+	if !isDiscoveredApp(drpc) {
+		return nil
+	}
+
+	for _, ns := range *drpc.Spec.ProtectedNamespaces {
+		if err := r.MCVGetter.DeleteNamespaceManagedClusterView(ns, "", clusterName, rmnutil.MWTypeNS); err != nil {
+			return fmt.Errorf("failed to delete namespace MCV for %q: %w", ns, err)
 		}
 	}
 
@@ -2798,7 +2835,7 @@ func adoptOrphanVRG(
 	annotations[DRPCNamespaceAnnotation] = drpc.Namespace
 
 	// Adopt the namespace as well
-	err := mwu.CreateOrUpdateNamespaceManifest(drpc.Name, vrgNamespace, cluster, annotations, map[string]string{})
+	err := mwu.CreateOrUpdateNamespaceManifestWork(drpc.Name, vrgNamespace, cluster, annotations, map[string]string{})
 	if err != nil {
 		log.Info("error creating namespace via ManifestWork during adoption", "error", err, "cluster", cluster)
 
@@ -3074,15 +3111,17 @@ func (r *DRPlacementControlReconciler) drpcProtectVMInNS(drpc *rmn.DRPlacementCo
 	keys := []string{core.VMList, core.K8SLabelSelector, core.PVCLabelSelector}
 
 	for _, k := range keys {
-		// Default to marking conflict when overlap is found (matches prior behavior)
-		// Note: original observed generation-based tie-breaker preserved behavior omitted here;
-		// this logic marks overlap as conflict, which matches the earlier refactor decisions.
+		// If any recipe parameter key has overlapping values between the two DRPCs,
+		// they are protecting the same VM resources — not independent, so return false
+		// to let the namespace-conflict check run and produce an error.
 		if sets.NewString(drpcParams[k]...).Intersection(sets.NewString(otherParams[k]...)).Len() > 0 {
-			return true
+			return false
 		}
 	}
 
-	return false
+	// No overlap on any key: both DRPCs use vm-recipe and protect disjoint VMs
+	// in the same namespace — this is explicitly supported, skip the conflict check.
+	return true
 }
 
 // EnsureDoNotDeletePVCAnnotation ensures that the "do-not-delete-pvc" annotation is propagated from the DRPC

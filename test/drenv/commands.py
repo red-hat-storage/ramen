@@ -33,6 +33,10 @@ _READ_BUF = 32 * 1024
 
 class Error(Exception):
 
+    # Set by with_exception() to the original exception that caused
+    # this error (e.g. FileNotFoundError for missing executables).
+    cause = None
+
     def __init__(self, command, error, exitcode=None, output=None):
         self.command = command
         self.error = error
@@ -41,9 +45,10 @@ class Error(Exception):
 
     def with_exception(self, exc):
         """
-        Return a new error preserving the traceback from another excpetion.
+        Return a new error preserving the traceback from another exception.
         """
         self.__cause__ = None
+        self.cause = exc
         return self.with_traceback(exc.__traceback__)
 
     def __str__(self):
@@ -304,7 +309,9 @@ def pipeline(*commands, input=None, decode=True, timeout=_DEFAULT_TIMEOUT):
                     proc.kill()
                 for proc in procs:
                     proc.wait()
-                raise PipelineError([Failure(cmd, None, f"Could not execute: {e}")])
+                raise PipelineError(
+                    [Failure(cmd, None, f"Could not execute: {e}")]
+                ).with_exception(e)
 
             # Close our reference so the previous process gets SIGPIPE if this
             # one exits.
