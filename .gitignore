@@ -67,3 +67,9 @@ ginkgo.report
 
 # Output files
 out/
+
+# Test programs
+/test/timestamp/timestamp
+
+# macOS system files
+.DS_Store

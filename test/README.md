@@ -102,7 +102,7 @@ environment.
    ```
 
    See [Installing Helm](https://helm.sh/docs/intro/install/) for other options
-   Tested with version v4.0.1.
+   Tested with version v4.2.2.
 
 1. Install the `virtctl` tool
 
@@ -143,7 +143,7 @@ environment.
 1. Install the `argocd` tool
 
    ```
-   curl -L -o argocd https://github.com/argoproj/argo-cd/releases/download/v2.11.3/argocd-linux-amd64
+   curl -L -o argocd https://github.com/argoproj/argo-cd/releases/download/v3.4.4/argocd-linux-amd64
    sudo install argocd /usr/local/bin/
    rm argocd
    argocd version --client
@@ -167,7 +167,8 @@ environment.
 
 ## Setup on macOS 26+
 
-> [!IMPORTANT] Older macOS are not supported.
+> [!IMPORTANT]
+> Older macOS are not supported.
 
 1. Install the [Homebrew package manager](https://brew.sh/)
 
@@ -352,6 +353,49 @@ drenv cleanup
 ```
 
 This should not be needed.
+
+## Shell completion for `drenv`
+
+`drenv` supports shell completion, making it easier to complete subcommands,
+options, and environment file paths while typing.
+
+After activating the project's virtual environment, enable completion by running
+the following command. This works with the default shells on Linux (Bash) and
+macOS (Zsh):
+
+```sh
+source <(register-python-argcomplete drenv)
+```
+
+If you are using Zsh and shell completion is not already enabled in your
+environment, enable it once by running:
+
+```sh
+echo "autoload -U compinit; compinit" >> ~/.zshrc
+```
+
+Open a new shell (or reload your shell configuration), activate the virtual
+environment, and run the completion command above.
+
+To verify the feature, try:
+
+```sh
+% drenv st[TAB]
+start        -- start an environment
+stop         -- stop an environment
+stress-test  -- run drenv stress test
+
+% drenv start --[TAB]
+--help            -- show this help message and exit
+--logfile         -- path to logfile (default 'drenv.log')
+--name-prefix     -- prefix profile names
+--skip-tests      -- Do not run addons 'test' hooks
+--skip-addons     -- Do not run addons 'start' hooks
+```
+
+`drenv` uses the Python `argcomplete` package, which integrates with `argparse`
+to keep shell completions synchronized with the command-line interface
+automatically.
 
 ## Configuring drenv
 

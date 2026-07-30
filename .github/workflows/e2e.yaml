@@ -3,30 +3,85 @@
 
 # yamllint disable rule:line-length
 ---
+# Security of pull_request_target with forked PR checkout
+#
+# This workflow uses pull_request_target to ensure the workflow file always
+# comes from the base branch (main) and cannot be modified by a PR author.
+# This is required to enforce the authorization check - using pull_request
+# would allow a fork PR to remove the check and run arbitrary code on
+# self-hosted runners.
+#
+# The test job checks out and executes PR code (allow-unsafe-pr-checkout)
+# in the pull_request_target security context. This is considered safe
+# because of the following controls and restrictions:
+#
+#   Risk              | Mitigation
+#   ------------------+--------------------------------------------------
+#   Unauthorized PRs  | The auth job verifies the PR author is listed in
+#                     | the OWNERS file (from the base branch) before
+#                     | the test job runs any PR code.
+#   GITHUB_TOKEN      | Scoped to read-only (permissions: contents: read).
+#                     | For fork PRs, pull_request also enforces read-only,
+#                     | so there is no additional exposure.
+#   Repo secrets      | Not used by this workflow. Do NOT add secrets
+#                     | without reviewing the security implications.
+#   Actions cache     | Not used by this workflow. Do NOT add actions/cache
+#                     | since pull_request_target can write to the default
+#                     | branch cache, enabling cache poisoning attacks.
 name: e2e
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
 
 env:
   # Limit number of drenv workers.
   MAX_WORKERS: 4
   BUILD_ID: ${{ github.run_id }}-${{ github.run_attempt }}
 
-# cancel the in-progress workflow when PR is refreshed.
+# Cancel the in-progress workflow when PR is refreshed.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  e2e-rdr:
+  auth:
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Checkout base branch
+      uses: actions/checkout@v6
+
+    - name: Install PyYAML
+      run: pip install pyyaml
+
+    - name: Check e2e authorization
+      shell: python3 {0}
+      run: |
+        import yaml, sys
+
+        with open("OWNERS") as f:
+            users = yaml.safe_load(f)["e2e"]
+
+        author = "${{ github.event.pull_request.user.login }}"
+
+        if author not in users:
+            print(f"::warning::User {author} is not in the e2e group. "
+                  "Add yourself to the OWNERS file to run the e2e workflow.")
+            sys.exit(1)
+
+  test:
+    needs: auth
     runs-on: [self-hosted, e2e-rdr]
-    if: github.repository == 'RamenDR/ramen' && github.event.pull_request.author_association == 'MEMBER'
 
     steps:
-    - name: Checkout Repo
+    - name: Checkout PR
       uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        allow-unsafe-pr-checkout: true  # See security section above
 
     - name: Build ramen-operator container
       run: make docker-build
