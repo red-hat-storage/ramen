@@ -209,12 +209,6 @@ func (v *VRGInstance) reconcileVolRepsAsSecondary() bool {
 	// This happens when user sets spec.dryRun=false or removes dryRun field from DRPC spec
 	// The VRG must delete all dry-run snapshots BEFORE proceeding
 	if v.shouldCleanupDryRunSnapshots() {
-		if v.instance.Spec.ReplicationState == ramendrv1alpha1.Secondary {
-			v.log.Info("Dry-run reverted, cleaning up snapshots before transitioning to Secondary")
-		} else {
-			v.log.Info("Promoting test failover to real, cleaning up dry-run snapshots while staying Primary")
-		}
-
 		if err := cleanupDryRunSnapshots(v.ctx, v.reconciler.Client, v.log, v.instance, v.volRepPVCs); err != nil {
 			v.log.Error(err, "Failed to cleanup dry-run snapshots")
 
@@ -817,6 +811,9 @@ func (v *VRGInstance) destinationInfoAvailableOrSkip(
 
 // applyDestinationVolumeHandleToPV sets destinationVolumeHandleAnnotation on pv when it differs
 // and persists the change. destinationVolumeHandle must be non-empty.
+// Clearing the archived annotation forces a re-upload to S3 in the same reconcile:
+// annotation-only PV updates do not bump Generation, so isArchivedAlready would otherwise
+// skip upload of the updated PV.
 func (v *VRGInstance) applyDestinationVolumeHandleToPV(
 	pv *corev1.PersistentVolume, destinationVolumeHandle string,
 ) error {
@@ -829,6 +826,7 @@ func (v *VRGInstance) applyDestinationVolumeHandleToPV(
 	}
 
 	pv.Annotations[destinationVolumeHandleAnnotation] = destinationVolumeHandle
+	delete(pv.Annotations, pvcVRAnnotationArchivedKey)
 	v.log.Info(fmt.Sprintf("annotated PV %s with DestinationVolumeID %s", pv.Name, destinationVolumeHandle))
 
 	if err := v.reconciler.Update(v.ctx, pv); err != nil {
