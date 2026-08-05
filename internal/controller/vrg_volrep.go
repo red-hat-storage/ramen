@@ -2917,7 +2917,7 @@ func cleanupPVCForRestore(pvc *corev1.PersistentVolumeClaim) error {
 //	VRG.conditions.Available.Status = false
 //	VRG.conditions.Available.Reason = Progressing
 //
-//nolint:funlen
+//nolint:funlen,gocognit,cyclop
 func (v *VRGInstance) aggregateVolRepDataReadyCondition() *metav1.Condition {
 	if len(v.volRepPVCs) == 0 {
 		return v.vrgReadyStatus(VRGConditionReasonUnused)
@@ -2941,6 +2941,18 @@ func (v *VRGInstance) aggregateVolRepDataReadyCondition() *metav1.Condition {
 			// why treat it as an error instead of progressing?
 			v.log.Info(fmt.Sprintf("Failed to find condition %s for vrg %s/%s", VRGConditionTypeDataReady,
 				v.instance.Name, v.instance.Namespace))
+
+			break
+		}
+
+		if v.hasGlobalVGRLabel() && condition.ObservedGeneration != v.instance.Generation {
+			vrgReady = false
+			vrgProgressing = true
+
+			v.log.Info("Stale DataReady condition detected for PVC, treating as progressing",
+				"protectedPVC", protectedPVC.Name,
+				"conditionGeneration", condition.ObservedGeneration,
+				"vrgGeneration", v.instance.Generation)
 
 			break
 		}
