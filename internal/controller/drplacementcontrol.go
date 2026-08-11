@@ -773,8 +773,8 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 		// in case of an error, try again later
 		return !done, err
 	}
-	// Use the DRPC Protected condition to check if it is true and then allow failover
-	if d.instance.Spec.DryRun && !d.isProtected() {
+	// For dry-run: block until workload is protected and replication is current.
+	if d.instance.Spec.DryRun && !d.dryRunReadyToFailover() {
 		return !done, nil
 	}
 
@@ -801,6 +801,42 @@ func (d *DRPCInstance) isProtected() bool {
 		metav1.ConditionFalse, string(d.instance.Status.Phase), msg)
 
 	return false
+}
+
+// dryRunReadyToFailover returns true when the workload is protected and replication is current,
+// meaning a dry-run test failover can safely proceed.
+func (d *DRPCInstance) dryRunReadyToFailover() bool {
+	return d.isProtected() && !d.isGroupSyncLagging()
+}
+
+// isGroupSyncLagging reports true when the most recent group sync is older than 3× the DRPolicy scheduling interval,
+// meaning replication has fallen behind and a dry-run test failover would not reflect current data.
+// Returns false if the scheduling interval cannot be parsed.
+func (d *DRPCInstance) isGroupSyncLagging() bool {
+	if d.instance.Status.LastGroupSyncTime == nil {
+		return false
+	}
+
+	intervalSecs, err := rmnutil.GetSecondsFromSchedulingInterval(d.drPolicy)
+	if err != nil {
+		return false
+	}
+
+	lag := time.Since(d.instance.Status.LastGroupSyncTime.Time.UTC())
+
+	if lag <= 3*time.Duration(intervalSecs)*time.Second {
+		return false
+	}
+
+	const msg = "cannot start dry-run failover: lastGroupSyncTime is lagging behind," +
+		" check workload and cluster replication state"
+
+	d.log.Info("Dry-run failover blocked", "reason", msg)
+
+	addOrUpdateCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
+		metav1.ConditionFalse, string(d.instance.Status.Phase), msg)
+
+	return true
 }
 
 // isValidFailoverTarget determines if the passed in cluster is a valid target to failover to. A valid failover target
