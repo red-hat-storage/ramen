@@ -80,6 +80,16 @@ const (
 	// GlobalActionConsensus condition indicates whether all DRPCs sharing the same global VGR label
 	// agree on the DR action and target cluster.
 	ConditionGlobalAction = "GlobalAction"
+
+	// NetworkMappingLoaded condition indicates whether the network-mapping ConfigMap was
+	// successfully loaded for this DRPC.
+	//
+	// The ConfigMap is obtained from DRPolicy.Spec.NetworkMappingRef.
+	//
+	// A False value indicates that IP translation is disabled for this DRPC.
+	// DR orchestration continues without IP translation. The condition is
+	// absent when no ConfigMap is configured for the DRPC.
+	ConditionNetworkMappingLoaded = "NetworkMappingLoaded"
 )
 
 const (
