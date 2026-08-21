@@ -188,7 +188,7 @@ func (v *VRGInstance) reconcilePVCAsVolSyncPrimary(pvc corev1.PersistentVolumeCl
 		rsSpec = *rsSpecInfo
 	}
 
-	v.log.Info("PVC has CG label", "name", pvc.Name, "Labels", pvc.Labels)
+	v.log.Info("PVC has CG label?", "name", pvc.Name, "Labels", pvc.Labels)
 	cg, ok := v.getCGLablelFromPVC(&pvc, v.instance.Spec.RunFinalSync)
 
 	isCGEnabled := ok && util.IsCGEnabledForVolSync(v.ctx, v.reconciler.APIReader)
@@ -203,6 +203,18 @@ func (v *VRGInstance) reconcilePVCAsVolSyncPrimary(pvc corev1.PersistentVolumeCl
 	)
 	if err != nil {
 		v.log.Info(fmt.Sprintf("Unable to Prepare PVC. We'll retry later. %v", err))
+
+		return true
+	}
+
+	if err := v.volSyncHandler.RetainPVForPVC(pvc); err != nil {
+		v.log.Info("Requeuing, as retaining PV for VolSync PVC failed", "pvcName", pvc.Name, "error", err)
+
+		return true
+	}
+
+	if err := v.volSyncHandler.StripPVCOwnerReferences(&pvc); err != nil {
+		v.log.Info("Requeuing, as stripping legacy ownerReferences failed", "pvcName", pvc.Name, "error", err)
 
 		return true
 	}
@@ -371,7 +383,53 @@ func (v *VRGInstance) reconcileVolSyncAsSecondary() bool {
 	v.instance.Status.PrepareForFinalSyncComplete = false
 	v.instance.Status.FinalSyncComplete = false
 
+	if requeue := v.handleDeletingVolSyncPVCsAsSecondary(); requeue {
+		return true
+	}
+
 	return v.reconcileRDSpecForDeletionOrReplication()
+}
+
+// handleDeletingVolSyncPVCsAsSecondary handles PVCs that are being deleted on the old primary
+// (now secondary) during failover/relocate. For each PVC marked for deletion, it clears the
+// PV claimRef so the PV goes to Available (not Released), then removes the VolSync finalizer
+// to allow the PVC deletion to complete.
+func (v *VRGInstance) handleDeletingVolSyncPVCsAsSecondary() bool {
+	requeue := false
+
+	for idx := range v.volSyncPVCs {
+		pvc := &v.volSyncPVCs[idx]
+
+		if !util.ResourceIsDeleted(pvc) {
+			continue
+		}
+
+		v.log.Info("VolSync PVC is being deleted on secondary, preparing PV for rebinding",
+			"pvcName", pvc.Name, "namespace", pvc.Namespace)
+
+		if err := v.volSyncHandler.CleanupPVClaimRefForPVCDeletion(*pvc); err != nil {
+			v.log.Error(err, "Failed to cleanup PV claimRef for PVC deletion", "pvcName", pvc.Name)
+
+			requeue = true
+
+			continue
+		}
+
+		err := util.NewResourceUpdater(pvc).
+			RemoveFinalizer(volsync.PVCFinalizerProtected).
+			Update(v.ctx, v.reconciler.Client)
+		if err != nil {
+			v.log.Error(err, "Failed to remove finalizer from deleting PVC", "pvcName", pvc.Name)
+
+			requeue = true
+
+			continue
+		}
+
+		v.log.Info("PVC finalizer removed, PV ready for rebinding", "pvcName", pvc.Name)
+	}
+
+	return requeue
 }
 
 // updateWorkloadActivityAsSecondary updates workload status of volsync PVCs if still in use by the workload. This is
@@ -897,12 +955,13 @@ func (v *VRGInstance) pvcUnprotectVolSync(pvc corev1.PersistentVolumeClaim, log 
 		}
 	}
 
-	// Determine if VRG is being deleted to decide whether to skip PVC disownership
-	vrgBeingDeleted := util.ResourceIsDeleted(v.instance)
+	if err := v.volSyncHandler.UndoPVRetentionForPVC(pvc); err != nil {
+		log.Error(err, "Failed to undo PV retention for deselected PVC", "PVC", pvc.Name)
+	}
 
-	log.Info("Unprotecting VolSync PVC", "PVC", pvc.Name, "vrgBeingDeleted", vrgBeingDeleted)
-	// This call is only from Primary cluster. delete ReplicationSource/CG and related resources.
-	if err := v.volSyncHandler.UnprotectVolSyncPVC(&pvc, vrgBeingDeleted); err != nil {
+	log.Info("Unprotecting VolSync PVC", "PVC", pvc.Name)
+
+	if err := v.volSyncHandler.UnprotectVolSyncPVC(&pvc); err != nil {
 		log.Error(err, "Failed to unprotect VolSync PVC", "PVC", pvc.Name)
 
 		return
@@ -911,17 +970,11 @@ func (v *VRGInstance) pvcUnprotectVolSync(pvc corev1.PersistentVolumeClaim, log 
 	v.pvcStatusDeleteIfPresent(pvc.Namespace, pvc.Name, log)
 }
 
-// disownPVCs this function is disassociating all PVCs (targeted for VolSync replication) from its owner (VRG)
-func (v *VRGInstance) disownPVCs() error {
-	if v.instance.GetAnnotations()[DoNotDeletePVCAnnotation] != DoNotDeletePVCAnnotationVal {
-		return nil
-	}
-
+func (v *VRGInstance) undoPVRetentionForVolSyncPVCs() error {
 	for idx := range v.volSyncPVCs {
 		pvc := &v.volSyncPVCs[idx]
 
-		err := v.volSyncHandler.DisownVolSyncManagedPVC(pvc)
-		if err != nil {
+		if err := v.volSyncHandler.UndoPVRetentionForPVC(*pvc); err != nil {
 			return err
 		}
 	}
@@ -954,20 +1007,51 @@ func (v *VRGInstance) cleanupResources() error {
 		if err := v.doCleanupResources(protectedPVC.Name, protectedPVC.Namespace); err != nil {
 			return err
 		}
+
+		if v.instance.Spec.ReplicationState == ramendrv1alpha1.Secondary {
+			if err := v.deleteDestinationPVC(protectedPVC.Name, protectedPVC.Namespace); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
 }
 
+func (v *VRGInstance) deleteDestinationPVC(name, namespace string) error {
+	pvc := &corev1.PersistentVolumeClaim{}
+
+	err := v.reconciler.Get(v.ctx, types.NamespacedName{Name: name, Namespace: namespace}, pvc)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+
+		return fmt.Errorf("failed to get destination PVC %s/%s: %w", namespace, name, err)
+	}
+
+	if err := v.volSyncHandler.UndoPVRetentionForPVC(*pvc); err != nil {
+		return fmt.Errorf("failed to undo PV retention for destination PVC %s/%s: %w", namespace, name, err)
+	}
+
+	err = util.NewResourceUpdater(pvc).
+		RemoveFinalizer(volsync.PVCFinalizerProtected).
+		Update(v.ctx, v.reconciler.Client)
+	if err != nil {
+		return fmt.Errorf("failed to remove finalizer from destination PVC %s/%s: %w", namespace, name, err)
+	}
+
+	v.log.Info("Deleting destination PVC", "pvcName", name, "namespace", namespace)
+
+	return v.reconciler.Delete(v.ctx, pvc)
+}
+
 func (v *VRGInstance) doCleanupResources(name, namespace string) error {
-	if err := v.volSyncHandler.DeleteRS(name, namespace, true); err != nil {
+	if err := v.volSyncHandler.DeleteRS(name, namespace); err != nil {
 		return err
 	}
 
-	// Here, we don't remove the RD as an owner of the PVC as the RD is being deleted because the workload is being
-	// deleted. Instead, we want garbage collection to clean up the PVC as part of that RD deletion (because it is on
-	// the secondary.)
-	if err := v.volSyncHandler.DeleteRD(name, namespace, true); err != nil {
+	if err := v.volSyncHandler.DeleteRD(name, namespace); err != nil {
 		return err
 	}
 

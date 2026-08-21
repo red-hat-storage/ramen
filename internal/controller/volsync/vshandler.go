@@ -55,11 +55,6 @@ const (
 	VolSyncDoNotDeleteLabel    = "volsync.backube/do-not-delete" // TODO: point to volsync constant once it is available
 	VolSyncDoNotDeleteLabelVal = "true"
 
-	// See: https://issues.redhat.com/browse/ACM-1256
-	// https://github.com/stolostron/backlog/issues/21824
-	ACMAppSubDoNotDeleteAnnotation    = "apps.open-cluster-management.io/do-not-delete"
-	ACMAppSubDoNotDeleteAnnotationVal = "true"
-
 	OwnerNameAnnotation      = "ramendr.openshift.io/owner-name"
 	OwnerNamespaceAnnotation = "ramendr.openshift.io/owner-namespace"
 
@@ -185,7 +180,7 @@ func (v *VSHandler) ReconcileRD(
 	// Check if a ReplicationSource is still here (Can happen if transitioning from primary to secondary)
 	// Before creating a new RD for this PVC, make sure any ReplicationSource for this PVC is cleaned up first
 	// This avoids a scenario where we create an RD that immediately syncs with an RS that still exists locally
-	err = v.DeleteRS(rdSpec.ProtectedPVC.Name, rdSpec.ProtectedPVC.Namespace, false)
+	err = v.DeleteRS(rdSpec.ProtectedPVC.Name, rdSpec.ProtectedPVC.Namespace)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -199,10 +194,6 @@ func (v *VSHandler) ReconcileRD(
 
 	rd, err = v.createOrUpdateRD(rdSpec, pskSecretName, dstPVC, moverConfig)
 	if err != nil {
-		return nil, nil, err
-	}
-
-	if err = v.AssignRDAndRSAsOwnerToProtectedPVC(rd, rdSpec.ProtectedPVC); err != nil {
 		return nil, nil, err
 	}
 
@@ -291,89 +282,6 @@ func RDStatusReady(rd *volsyncv1alpha1.ReplicationDestination, log logr.Logger) 
 	}
 
 	return true
-}
-
-func (v *VSHandler) setRDAndRSAsOwnerOfPVC(
-	obj client.Object,
-	pvc *corev1.PersistentVolumeClaim,
-) error {
-	// Only set OwnerReference if RD and PVC are in the same namespace
-	if obj.GetNamespace() != pvc.Namespace {
-		return nil
-	}
-
-	// Work on a deep copy to avoid mutating caller's object
-	updated := pvc.DeepCopy()
-
-	kind, err := getKindRSorRD(obj)
-	if err != nil {
-		return err
-	}
-
-	// Create a new controller reference
-	ref := metav1.NewControllerRef(
-		obj,
-		volsyncv1alpha1.GroupVersion.WithKind(kind))
-	// Overwrite OwnerReferences with the new one
-	updated.SetOwnerReferences([]metav1.OwnerReference{*ref})
-
-	// Update the PVC
-	if err := v.client.Update(v.ctx, updated); err != nil {
-		v.log.Error(err, "Failed to update ProtectedPVC", "PVC", pvc.Name)
-
-		return err
-	}
-
-	return nil
-}
-
-func getKindRSorRD(obj runtime.Object) (string, error) {
-	switch obj.(type) {
-	case *volsyncv1alpha1.ReplicationDestination:
-		return "ReplicationDestination", nil
-	case *volsyncv1alpha1.ReplicationSource:
-		return "ReplicationSource", nil
-	default:
-		return "", fmt.Errorf("unsupported object type: %T", obj)
-	}
-}
-
-func (v *VSHandler) AssignRDAndRSAsOwnerToProtectedPVC(
-	obj client.Object,
-	protectedPVC ramendrv1alpha1.ProtectedPVC,
-) error {
-	if protectedPVC.Name == "" || protectedPVC.Namespace == "" {
-		v.log.Info("No ProtectedPVC specified in ReplicationDestination spec")
-
-		return nil
-	}
-
-	key := types.NamespacedName{
-		Namespace: protectedPVC.Namespace,
-		Name:      protectedPVC.Name,
-	}
-
-	pvc, err := v.getPVC(key)
-	if err != nil {
-		// todo check expected behavior in this case.
-		if errors.IsNotFound(err) {
-			v.log.Info("No ProtectedPVC found", "PVC", key)
-
-			return nil
-		}
-
-		v.log.Error(err, "Failed to get PVC from ProtectedPVC reference", "namespace", key.Namespace, "name", key.Name)
-
-		return err
-	}
-
-	if err := v.setRDAndRSAsOwnerOfPVC(obj, pvc); err != nil {
-		v.log.Error(err, "Failed to assign RD ownership to PVC", "pvc", pvc.Name)
-
-		return err
-	}
-
-	return nil
 }
 
 //nolint:funlen
@@ -527,7 +435,7 @@ func (v *VSHandler) ReconcileRS(rsSpec ramendrv1alpha1.VolSyncReplicationSourceS
 	// Before creating a new RS for this PVC, make sure any ReplicationDestination for this PVC is cleaned up first
 	// This avoids a scenario where we create an RS that immediately connects back to an RD that still exists locally
 	// Need to be sure ReconcileRS is never called prior to restoring any PVC that need to be restored from RDs first
-	err = v.DeleteRD(rsSpec.ProtectedPVC.Name, rsSpec.ProtectedPVC.Namespace, false)
+	err = v.DeleteRD(rsSpec.ProtectedPVC.Name, rsSpec.ProtectedPVC.Namespace)
 	if err != nil {
 		return false, nil, err
 	}
@@ -556,10 +464,6 @@ func (v *VSHandler) ReconcileRS(rsSpec ramendrv1alpha1.VolSyncReplicationSourceS
 
 	if replicationSource == nil {
 		return false, nil, nil // Requeue
-	}
-
-	if err = v.AssignRDAndRSAsOwnerToProtectedPVC(replicationSource, rsSpec.ProtectedPVC); err != nil {
-		return false, replicationSource, err
 	}
 
 	//
@@ -843,7 +747,7 @@ func (v *VSHandler) SetupTmpPVCForFinalSync(pvc *corev1.PersistentVolumeClaim) (
 
 func (v *VSHandler) retainPVAndCreateTmpPVC(pvc *corev1.PersistentVolumeClaim) (*corev1.PersistentVolumeClaim, error) {
 	// Retain the PersistentVolume
-	if err := v.retainPVForPVC(*pvc); err != nil {
+	if err := v.retainPVAndRedirectForFinalSync(*pvc); err != nil {
 		v.log.Info("Requeuing, as retaining PersistentVolume failed", "error", err)
 
 		return nil, err
@@ -868,7 +772,7 @@ func (v *VSHandler) retainPVAndCreateTmpPVC(pvc *corev1.PersistentVolumeClaim) (
 	return tmpPVC, nil
 }
 
-func (v *VSHandler) retainPVForPVC(pvc corev1.PersistentVolumeClaim) error {
+func (v *VSHandler) retainPVAndRedirectForFinalSync(pvc corev1.PersistentVolumeClaim) error {
 	l := v.log.WithValues("pvc", pvc.Name)
 
 	l.V(1).Info("retain PV for PVC")
@@ -1115,14 +1019,6 @@ func (v *VSHandler) PreparePVC(pvcNamespacedName types.NamespacedName,
 		"isCGEnabled", isCGEnabled, "copyMethodDirect", copyMethodDirect,
 		"prepFinalSync", prepFinalSync, "runFinalSync", runFinalSync)
 
-	if copyMethodDirect && !prepFinalSync && !runFinalSync {
-		taken, err := v.TakePVCOwnership(pvcNamespacedName)
-		if err != nil || !taken {
-			return fmt.Errorf("waiting to take pvc ownership (%w), prepFinalSync: %t, Direct: %t",
-				err, prepFinalSync, copyMethodDirect)
-		}
-	}
-
 	if !prepFinalSync {
 		return nil
 	}
@@ -1137,31 +1033,6 @@ func (v *VSHandler) PreparePVC(pvcNamespacedName types.NamespacedName,
 	}
 
 	return v.prepareForFinalSync(pvcNamespacedName)
-}
-
-// TakePVCOwnership adds do-not-delete annotation to indicate that ACM should not delete/cleanup this pvc
-// when the appsub is removed.
-func (v *VSHandler) TakePVCOwnership(pvcNamespacedName types.NamespacedName) (bool, error) {
-	l := v.log.WithValues("pvc", pvcNamespacedName)
-
-	l.V(1).Info("Take PVC ownership")
-
-	// Confirm PVC exists
-	pvc, err := v.validatePVC(pvcNamespacedName)
-	if err != nil {
-		l.Error(err, "unable to validate PVC or add ownership")
-
-		return false, err
-	}
-
-	err = v.client.Update(v.ctx, pvc)
-	if err != nil {
-		l.Error(err, "Error updating annotations on PVC to break appsub ownership")
-
-		return false, fmt.Errorf("error updating annotations on PVC to break appsub ownership (%w)", err)
-	}
-
-	return true, nil
 }
 
 func (v *VSHandler) prepareForCGFinalSync(rgsNamespacedName, pvcNamespacedName types.NamespacedName) error {
@@ -1281,18 +1152,19 @@ func (v *VSHandler) prepareForFinalSync(pvcNamespacedName types.NamespacedName) 
 }
 
 func (v *VSHandler) doPrepFinalSync(pvcNamespacedName types.NamespacedName) error {
-	_, err := v.ReleasePVCOwnership(pvcNamespacedName)
+	_, err := v.addPVCProtectionFinalizer(pvcNamespacedName)
 	if err != nil {
-		return fmt.Errorf("waiting to release pvc ownership (%w)", err)
+		return fmt.Errorf("waiting to add PVC protection finalizer (%w)", err)
 	}
 
 	return nil
 }
 
-func (v *VSHandler) ReleasePVCOwnership(pvcNamespacedName types.NamespacedName) (*corev1.PersistentVolumeClaim, error) {
+func (v *VSHandler) addPVCProtectionFinalizer(pvcNamespacedName types.NamespacedName,
+) (*corev1.PersistentVolumeClaim, error) {
 	l := v.log.WithValues("pvc", pvcNamespacedName)
 
-	l.V(1).Info("Release PVC ownership and remove OCM annotation")
+	l.V(1).Info("Adding PVC protection finalizer")
 
 	pvc, err := v.getPVC(pvcNamespacedName)
 	if err != nil {
@@ -1301,8 +1173,6 @@ func (v *VSHandler) ReleasePVCOwnership(pvcNamespacedName types.NamespacedName) 
 
 	return pvc, util.NewResourceUpdater(pvc).
 		AddFinalizer(PVCFinalizerProtected).
-		DeleteAnnotation(ACMAppSubDoNotDeleteAnnotation). // Allows ACM to delete the PVC when the appsub is removed
-		RemoveOwner(v.owner, v.client.Scheme()).
 		Update(v.ctx, v.client)
 }
 
@@ -1343,30 +1213,6 @@ func (v *VSHandler) getPVC(pvcNamespacedName types.NamespacedName) (*corev1.Pers
 	if err != nil {
 		return nil, fmt.Errorf("%w", err)
 	}
-
-	return pvc, nil
-}
-
-// Adds ACM "do-not-delete" annotation to indicate that when the appsub is removed, ACM
-// should not cleanup this PVC - we want it left behind so we can run a final sync
-func (v *VSHandler) validatePVC(pvcNamespacedName types.NamespacedName) (
-	*corev1.PersistentVolumeClaim, error,
-) {
-	pvc, err := v.getPVC(pvcNamespacedName)
-	if err != nil {
-		return nil, err
-	}
-
-	v.log.Info("PVC exists", "pvcName", pvcNamespacedName.Name, "pvcNamespaceName", pvcNamespacedName.Namespace)
-
-	// Add annotation to indicate that ACM should not delete/cleanup this pvc when the appsub is removed
-	// and add VRG as owner
-	err = v.addAnnotationAndUpdate(pvc, ACMAppSubDoNotDeleteAnnotation, ACMAppSubDoNotDeleteAnnotationVal)
-	if err != nil {
-		return nil, err
-	}
-
-	v.log.V(1).Info("PVC validated", "pvcName", pvcNamespacedName.Name, "pvcNamespaceName", pvcNamespacedName.Namespace)
 
 	return pvc, nil
 }
@@ -1484,8 +1330,7 @@ func (v *VSHandler) getRS(name, namespace string) (*volsyncv1alpha1.ReplicationS
 	return rs, nil
 }
 
-func (v *VSHandler) DeleteRS(pvcName string, pvcNamespace string, skipPVCDisownership bool) error {
-	// Remove a ReplicationSource by name that is owned (by parent vrg owner)
+func (v *VSHandler) DeleteRS(pvcName string, pvcNamespace string) error {
 	currentRSListByOwner, err := v.listRSByOwner(pvcNamespace)
 	if err != nil {
 		return err
@@ -1495,7 +1340,7 @@ func (v *VSHandler) DeleteRS(pvcName string, pvcNamespace string, skipPVCDisowne
 		rs := currentRSListByOwner.Items[i]
 
 		if rs.GetName() == getReplicationSourceName(pvcName) {
-			if err := v.cleanupRS(&rs, pvcName, pvcNamespace, skipPVCDisownership); err != nil {
+			if err := v.cleanupRS(&rs); err != nil {
 				return err
 			}
 		}
@@ -1504,83 +1349,7 @@ func (v *VSHandler) DeleteRS(pvcName string, pvcNamespace string, skipPVCDisowne
 	return nil
 }
 
-func (v *VSHandler) RemoveOwnerFromPVC(
-	obj client.Object,
-	pvcName, pvcNamespace string,
-) error {
-	// Removing the ownership should and can occur only if the resources in question reside in the same namespace.
-	// Otherwise, we exit early
-	if obj.GetNamespace() != pvcNamespace {
-		return nil
-	}
-
-	pvc := &corev1.PersistentVolumeClaim{}
-	key := types.NamespacedName{
-		Namespace: pvcNamespace,
-		Name:      pvcName,
-	}
-
-	if err := v.client.Get(v.ctx, key, pvc); err != nil {
-		if errors.IsNotFound(err) {
-			v.log.Info("PVC not found for disowning", "pvc", key)
-
-			return nil
-		}
-
-		return err
-	}
-
-	kind, err := getKindRSorRD(obj)
-	if err != nil {
-		return err
-	}
-
-	refCount := len(pvc.OwnerReferences)
-	newRefs := pruneOnerReferences(pvc.OwnerReferences, kind, obj.GetName(), obj.GetUID())
-
-	if len(newRefs) != refCount {
-		pvc.OwnerReferences = newRefs
-
-		if err := v.client.Update(v.ctx, pvc); err != nil {
-			v.log.Error(err, "Failed to remove ownership from PVC", "pvc", key)
-
-			return err
-		}
-
-		v.log.Info("Removed ownership from PVC", "pvc", key)
-	} else {
-		v.log.Info("No ownership found on PVC", "pvc", key)
-	}
-
-	return nil
-}
-
-func pruneOnerReferences(ownerRefs []metav1.OwnerReference, objKind, objName string, objUID types.UID,
-) []metav1.OwnerReference {
-	newRefs := []metav1.OwnerReference{}
-
-	for _, ref := range ownerRefs {
-		if ref.Kind == objKind && ref.Name == objName && ref.UID == objUID {
-			continue
-		}
-
-		newRefs = append(newRefs, ref)
-	}
-
-	return newRefs
-}
-
-func (v *VSHandler) cleanupRS(rs *volsyncv1alpha1.ReplicationSource, pvcName, pvcNamespace string,
-	skipPVCDisownership bool,
-) error {
-	if !skipPVCDisownership {
-		if err := v.RemoveOwnerFromPVC(rs, pvcName, pvcNamespace); err != nil {
-			v.log.Error(err, "Failed to disown PVC before deleting RS", "rs", rs.GetName(), "error", err)
-
-			return err
-		}
-	}
-	// Delete the ReplicationSource, log errors with cleanup but continue on
+func (v *VSHandler) cleanupRS(rs *volsyncv1alpha1.ReplicationSource) error {
 	if err := v.client.Delete(v.ctx, rs); err != nil {
 		v.log.Error(err, "Error cleaning up ReplicationSource", "name", rs.GetName())
 	} else {
@@ -1590,19 +1359,8 @@ func (v *VSHandler) cleanupRS(rs *volsyncv1alpha1.ReplicationSource, pvcName, pv
 	return nil
 }
 
-func (v *VSHandler) cleanupRD(rd *volsyncv1alpha1.ReplicationDestination, pvcName, pvcNamespace string,
-	skipPVCDisownership bool,
-) error {
-	// Step 1: Disown PVC, unless skipped
-	if !skipPVCDisownership {
-		if err := v.RemoveOwnerFromPVC(rd, pvcName, pvcNamespace); err != nil {
-			v.log.Error(err, "Failed to disown PVC before deleting RD", "rd", rd.GetName(), "error", err)
-
-			return err
-		}
-	}
-
-	// Step 2: Delete local RS if needed
+func (v *VSHandler) cleanupRD(rd *volsyncv1alpha1.ReplicationDestination) error {
+	// Delete local RS if needed
 	if v.IsCopyMethodDirect() {
 		if err := v.deleteLocalRDAndRS(rd); err != nil {
 			return err
@@ -1621,7 +1379,7 @@ func (v *VSHandler) cleanupRD(rd *volsyncv1alpha1.ReplicationDestination, pvcNam
 	return nil
 }
 
-func (v *VSHandler) DeleteRD(pvcName, pvcNamespace string, skipPVCDisownership bool) error {
+func (v *VSHandler) DeleteRD(pvcName, pvcNamespace string) error {
 	currentRDListByOwner, err := v.listRDByOwner(pvcNamespace)
 	if err != nil {
 		return err
@@ -1632,7 +1390,7 @@ func (v *VSHandler) DeleteRD(pvcName, pvcNamespace string, skipPVCDisownership b
 	for i := range currentRDListByOwner.Items {
 		rd := currentRDListByOwner.Items[i]
 		if rd.GetName() == expectedRDName {
-			if err := v.cleanupRD(&rd, pvcName, pvcNamespace, skipPVCDisownership); err != nil {
+			if err := v.cleanupRD(&rd); err != nil {
 				return err
 			}
 		}
@@ -1785,7 +1543,7 @@ func (v *VSHandler) CleanupRDNotInSpecList(rdSpecList []ramendrv1alpha1.VolSyncR
 			}
 
 			// Delete the ReplicationDestination, log errors with cleanup but continue on
-			if err := v.DeleteRD(rd.GetName(), rd.GetNamespace(), true); err != nil {
+			if err := v.DeleteRD(rd.GetName(), rd.GetNamespace()); err != nil {
 				v.log.Error(err, "Error cleaning up ReplicationDestination", "name", rd.GetName())
 			} else {
 				v.log.Info("Deleted ReplicationDestination", "name", rd.GetName())
@@ -2039,9 +1797,6 @@ func (v *VSHandler) EnsurePVCforDirectCopy(ctx context.Context,
 	}
 
 	if pvc != nil {
-		// This PVC is used by the RD. We don't need have the finalizer.
-		ctrlutil.RemoveFinalizer(pvc, PVCFinalizerProtected)
-
 		if err := v.removeOCMAnnotationsAndUpdate(pvc); err != nil {
 			return err
 		}
@@ -2074,7 +1829,11 @@ func (v *VSHandler) EnsurePVCforDirectCopy(ctx context.Context,
 
 	logger.V(1).Info("PVC created", "operation", op)
 
-	return nil
+	if err := v.StripPVCOwnerReferences(pvc); err != nil {
+		return err
+	}
+
+	return v.RetainPVForPVC(*pvc)
 }
 
 //nolint:nestif
@@ -2335,27 +2094,6 @@ func (v *VSHandler) validateAndProtectSnapshot(
 	v.log.V(1).Info("VolumeSnapshot validated and protected", "volumesnapshot name", volSnap.GetName())
 
 	return volSnap, nil
-}
-
-func (v *VSHandler) addAnnotationAndUpdate(obj client.Object,
-	annotationName, annotationValue string,
-) (err error) {
-	annotationsUpdated := util.AddAnnotation(obj, annotationName, annotationValue)
-	if annotationsUpdated {
-		objKindAndName := getKindAndName(v.client.Scheme(), obj)
-
-		if err := v.client.Update(v.ctx, obj); err != nil {
-			v.log.Error(err, "Failed to add annotation or VRG owner reference to obj", "obj", objKindAndName)
-
-			return fmt.Errorf("failed to add %s annotation or VRG owner reference to %s (%w)",
-				annotationName, objKindAndName, err)
-		}
-
-		v.log.Info("annotation and VRG ownerRef added to object",
-			"obj", objKindAndName, "annotationName", annotationName, "annotation value", annotationValue)
-	}
-
-	return nil
 }
 
 func (v *VSHandler) addOwnerReferenceAndUpdate(obj client.Object, owner metav1.Object) error {
@@ -3264,32 +3002,6 @@ func (v *VSHandler) checkLastSnapshotSyncStatus(lrs *volsyncv1alpha1.Replication
 	return !completed
 }
 
-func isDRManagedOwnerReference(ref metav1.OwnerReference) bool {
-	switch ref.Kind {
-	case "VolumeReplicationGroup", "ReplicationSource", "ReplicationDestination":
-		return true
-	default:
-		return false
-	}
-}
-
-func (v *VSHandler) DisownVolSyncManagedPVC(pvc *corev1.PersistentVolumeClaim) error {
-	// Called only when do-not-delete-pvc is set (disable DR). Strip DR-managed owners
-	// (VRG, RS, RD) so the application PVC survives VolSync resource teardown.
-	newRefs := []metav1.OwnerReference{}
-
-	for _, ref := range pvc.OwnerReferences {
-		if !isDRManagedOwnerReference(ref) {
-			newRefs = append(newRefs, ref)
-		}
-	}
-
-	pvc.ObjectMeta.OwnerReferences = newRefs
-	delete(pvc.Annotations, ACMAppSubDoNotDeleteAnnotation)
-
-	return v.client.Update(v.ctx, pvc)
-}
-
 func (v *VSHandler) addBackOCMAnnotationsAndUpdate(obj client.Object, annotations map[string]string) error {
 	updatedAnnotations := obj.GetAnnotations()
 
@@ -3360,11 +3072,10 @@ func (v *VSHandler) IsVRGInAdminNamespace() bool {
 	return v.vrgInAdminNamespace
 }
 
-func (v *VSHandler) UnprotectVolSyncPVC(pvc *corev1.PersistentVolumeClaim, skipPVCDisownership bool) error {
-	v.log.Info("Unprotecting VolSync PVC", "pvcName", pvc.GetName(), "pvcNamespace", pvc.GetNamespace(),
-		"skipPVCDisownership", skipPVCDisownership)
+func (v *VSHandler) UnprotectVolSyncPVC(pvc *corev1.PersistentVolumeClaim) error {
+	v.log.Info("Unprotecting VolSync PVC", "pvcName", pvc.GetName(), "pvcNamespace", pvc.GetNamespace())
 
-	err := v.DeleteRS(pvc.GetName(), pvc.GetNamespace(), skipPVCDisownership)
+	err := v.DeleteRS(pvc.GetName(), pvc.GetNamespace())
 	if err != nil {
 		v.log.Info("Failed to delete RS", "rs name", pvc.GetName(), "error", err)
 
@@ -3381,7 +3092,6 @@ func (v *VSHandler) UnprotectVolSyncPVC(pvc *corev1.PersistentVolumeClaim, skipP
 		DeleteLabel(util.ConsistencyGroupLabel).
 		DeleteLabel(util.CreatedByRamenLabel).
 		RemoveFinalizer(PVCFinalizerProtected).
-		RemoveOwner(v.owner, v.client.Scheme()).
 		Update(v.ctx, v.client)
 }
 
@@ -3752,4 +3462,133 @@ func (v *VSHandler) getRamenImage() string {
 	}
 
 	return ""
+}
+
+func (v *VSHandler) RetainPVForPVC(pvc corev1.PersistentVolumeClaim) error {
+	if pvc.Spec.VolumeName == "" {
+		return nil
+	}
+
+	pv := &corev1.PersistentVolume{}
+
+	if err := v.client.Get(v.ctx, types.NamespacedName{Name: pvc.Spec.VolumeName}, pv); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+
+		return fmt.Errorf("failed to get PV %s for PVC %s/%s: %w",
+			pvc.Spec.VolumeName, pvc.Namespace, pvc.Name, err)
+	}
+
+	if pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimRetain {
+		return nil
+	}
+
+	pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+
+	annotations := pv.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+
+	annotations[PVAnnotationRetentionKey] = PVAnnotationRetentionValue
+	pv.SetAnnotations(annotations)
+
+	v.log.Info("Retaining PV for VolSync PVC", "pvName", pv.Name, "pvcName", pvc.Name)
+
+	return v.client.Update(v.ctx, pv)
+}
+
+func (v *VSHandler) UndoPVRetentionForPVC(pvc corev1.PersistentVolumeClaim) error {
+	if pvc.Spec.VolumeName == "" {
+		return nil
+	}
+
+	pv := &corev1.PersistentVolume{}
+
+	if err := v.client.Get(v.ctx, types.NamespacedName{Name: pvc.Spec.VolumeName}, pv); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+
+		return fmt.Errorf("failed to get PV %s for PVC %s/%s: %w",
+			pvc.Spec.VolumeName, pvc.Namespace, pvc.Name, err)
+	}
+
+	val, ok := pv.ObjectMeta.Annotations[PVAnnotationRetentionKey]
+	if !ok || val != PVAnnotationRetentionValue {
+		return nil
+	}
+
+	pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+	delete(pv.ObjectMeta.Annotations, PVAnnotationRetentionKey)
+
+	v.log.Info("Undoing PV retention for VolSync PVC", "pvName", pv.Name, "pvcName", pvc.Name)
+
+	return v.client.Update(v.ctx, pv)
+}
+
+// StripPVCOwnerReferences removes any VRG, RS, or RD ownerReferences from the PVC.
+// This is a migration step for PVCs that were protected by older versions of Ramen
+// which set ownerReferences on PVCs. Without this, upgrading and then disabling DR
+// would still trigger Kubernetes GC on those PVCs.
+func (v *VSHandler) StripPVCOwnerReferences(pvc *corev1.PersistentVolumeClaim) error {
+	if len(pvc.OwnerReferences) == 0 {
+		return nil
+	}
+
+	newRefs := make([]metav1.OwnerReference, 0, len(pvc.OwnerReferences))
+
+	for _, ref := range pvc.OwnerReferences {
+		switch ref.Kind {
+		case "VolumeReplicationGroup", "ReplicationSource", "ReplicationDestination":
+			continue
+		default:
+			newRefs = append(newRefs, ref)
+		}
+	}
+
+	if len(newRefs) == len(pvc.OwnerReferences) {
+		return nil
+	}
+
+	pvc.OwnerReferences = newRefs
+
+	v.log.Info("Stripped legacy DR ownerReferences from PVC", "pvcName", pvc.Name)
+
+	return v.client.Update(v.ctx, pvc)
+}
+
+// CleanupPVClaimRefForPVCDeletion prepares the PV for rebinding before the PVC is deleted.
+// Clears claimRef.UID, ResourceVersion, APIVersion while keeping Kind, Name, Namespace
+// so the PV transitions to Available (not Released) and can rebind to a new PVC with the same name.
+func (v *VSHandler) CleanupPVClaimRefForPVCDeletion(pvc corev1.PersistentVolumeClaim) error {
+	if pvc.Spec.VolumeName == "" {
+		return nil
+	}
+
+	pv := &corev1.PersistentVolume{}
+
+	if err := v.client.Get(v.ctx, types.NamespacedName{Name: pvc.Spec.VolumeName}, pv); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+
+		return fmt.Errorf("failed to get PV %s for PVC %s/%s: %w",
+			pvc.Spec.VolumeName, pvc.Namespace, pvc.Name, err)
+	}
+
+	if pv.Spec.ClaimRef == nil {
+		return nil
+	}
+
+	pv.Spec.ClaimRef.UID = ""
+	pv.Spec.ClaimRef.ResourceVersion = ""
+	pv.Spec.ClaimRef.APIVersion = ""
+
+	v.log.Info("Clearing PV claimRef for PVC deletion",
+		"pvName", pv.Name, "pvcName", pvc.Name,
+		"claimRefName", pv.Spec.ClaimRef.Name, "claimRefNamespace", pv.Spec.ClaimRef.Namespace)
+
+	return v.client.Update(v.ctx, pv)
 }
