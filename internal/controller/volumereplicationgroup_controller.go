@@ -1338,8 +1338,8 @@ func (v *VRGInstance) processForDeletion() ctrl.Result {
 
 	defer v.log.Info("Exiting processing VolumeReplicationGroup")
 
-	if err := v.disownPVCs(); err != nil {
-		v.log.Info("Disowning PVCs failed", "error", err)
+	if err := v.undoPVRetentionForVolSyncPVCs(); err != nil {
+		v.log.Info("Undoing PV retention for VolSync PVCs failed", "error", err)
 
 		return ctrl.Result{Requeue: true}
 	}
@@ -2876,7 +2876,6 @@ func (v *VRGInstance) validateSecondaryPVCConflictForVolRep() *metav1.Condition 
 //   - replication.storage.openshift.io
 //   - volumereplicationgroups.ramendr.openshift.io
 //   - volsync.backube
-//   - apps.open-cluster-management.io && key == ACMAppSubDoNotDeleteAnnotation
 //
 // Parameters:
 //
@@ -2903,9 +2902,6 @@ func PruneAnnotations(annotations map[string]string) map[string]string {
 		case strings.HasPrefix(key, "volumereplicationgroups.ramendr.openshift.io"):
 			continue
 		case strings.HasPrefix(key, "volsync.backube"):
-			continue
-		case strings.HasPrefix(key, "apps.open-cluster-management.io") &&
-			key == volsync.ACMAppSubDoNotDeleteAnnotation:
 			continue
 		}
 

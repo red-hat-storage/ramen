@@ -108,12 +108,6 @@ func (c *cgHandler) CreateOrUpdateReplicationGroupDestination(
 		WithValues("ReplicationGroupDestinationName", replicationGroupDestinationName,
 			"ReplicationGroupDestinationNamespace", replicationGroupDestinationNamespace)
 
-	// Disown RS-managed PVCs before deleting RGS (RSs own PVCs on primary)
-	if err := c.disownRSManagedPVCsBeforeRGSDeletion(
-		replicationGroupDestinationName, replicationGroupDestinationNamespace, log); err != nil {
-		return nil, err
-	}
-
 	if err := util.DeleteReplicationGroupSource(c.ctx, c.Client,
 		replicationGroupDestinationName, replicationGroupDestinationNamespace); err != nil {
 		log.Error(err, "Failed to delete ReplicationGroupSource before creating ReplicationGroupDestination")
@@ -124,14 +118,6 @@ func (c *cgHandler) CreateOrUpdateReplicationGroupDestination(
 	rgd, err := c.createOrUpdateRGD(
 		replicationGroupDestinationName, replicationGroupDestinationNamespace, rdSpecsInGroup, log)
 	if err != nil {
-		return nil, err
-	}
-
-	// Ensure RDs own their corresponding PVCs to enable Kubernetes garbage collection
-	// when RDs are deleted
-	if err := c.ensureRDsOwnTheirPVCs(rdSpecsInGroup); err != nil {
-		log.Error(err, "Failed to ensure RDs own their PVCs")
-
 		return nil, err
 	}
 
@@ -180,143 +166,6 @@ func (c *cgHandler) createOrUpdateRGD(
 	}
 
 	return rgd, nil
-}
-
-// ensureRDsOwnTheirPVCs assigns each RD created from RDSpecs as owner of the corresponding PVC
-// This enables Kubernetes garbage collection to delete the PVC when the RD is deleted
-func (c *cgHandler) ensureRDsOwnTheirPVCs(rdSpecsInGroup []ramendrv1alpha1.VolSyncReplicationDestinationSpec) error {
-	log := c.logger.WithName("ensureRDsOwnTheirPVCs")
-
-	for _, rdSpec := range rdSpecsInGroup {
-		pvcName := rdSpec.ProtectedPVC.Name
-		pvcNamespace := rdSpec.ProtectedPVC.Namespace
-
-		// Get the RD that was created from this RDSpec
-		// The RD name is derived from the PVC name
-		rdName := util.GetReplicationDestinationName(pvcName)
-
-		// Get the RD object
-		rd := &volsyncv1alpha1.ReplicationDestination{}
-		if err := c.Client.Get(c.ctx, types.NamespacedName{
-			Name:      rdName,
-			Namespace: pvcNamespace,
-		}, rd); err != nil {
-			if k8serrors.IsNotFound(err) {
-				log.V(1).Info("RD not found, skipping PVC ownership assignment", "RD", rdName)
-
-				continue
-			}
-
-			log.Error(err, "Failed to get RD for PVC ownership assignment", "RD", rdName)
-
-			return err
-		}
-
-		// Assign RD as owner of the PVC
-		if err := c.VSHandler.AssignRDAndRSAsOwnerToProtectedPVC(rd, rdSpec.ProtectedPVC); err != nil {
-			log.Error(err, "Failed to assign RD ownership to PVC", "RD", rdName, "PVC", pvcName)
-
-			return err
-		}
-	}
-
-	return nil
-}
-
-// disownRSManagedPVCsBeforeRGSDeletion retrieves RGS and disowns RS-managed PVCs before RGS deletion
-func (c *cgHandler) disownRSManagedPVCsBeforeRGSDeletion(
-	rgsName, rgsNamespace string,
-	log logr.Logger,
-) error {
-	rgs := &ramendrv1alpha1.ReplicationGroupSource{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      rgsName,
-			Namespace: rgsNamespace,
-		},
-	}
-
-	if err := c.Client.Get(c.ctx, types.NamespacedName{
-		Name:      rgsName,
-		Namespace: rgsNamespace,
-	}, rgs); err != nil {
-		if k8serrors.IsNotFound(err) {
-			log.V(1).Info("RGS not found, skipping RS PVC disownership", "RGS", rgsName)
-
-			return nil
-		}
-
-		log.Error(err, "Failed to get RGS for RS ownership cleanup", "RGS", rgsName)
-
-		return err
-	}
-
-	// RGS exists, disown RS-managed PVCs before deleting RGS
-	if len(rgs.Spec.RSSpec) > 0 {
-		if err := c.disownRSManagedPVCs(rgs.Spec.RSSpec); err != nil {
-			log.Error(err, "Failed to disown RS-managed PVCs")
-
-			return err
-		}
-	}
-
-	return nil
-}
-
-// disownRDManagedPVCs removes RD ownership from PVCs before RGD deletion
-// This ensures PVCs are not automatically deleted when RDs are removed
-func (c *cgHandler) disownRDManagedPVCs(rdSpecs []ramendrv1alpha1.VolSyncReplicationDestinationSpec) error {
-	log := c.logger.WithName("disownRDManagedPVCs")
-
-	for _, rdSpec := range rdSpecs {
-		pvcName := rdSpec.ProtectedPVC.Name
-		pvcNamespace := rdSpec.ProtectedPVC.Namespace
-
-		// Get the RD that was created from this RDSpec
-		rdName := util.GetReplicationDestinationName(pvcName)
-
-		// Get the RD object
-		rd := &volsyncv1alpha1.ReplicationDestination{}
-		if err := c.Client.Get(c.ctx, types.NamespacedName{
-			Name:      rdName,
-			Namespace: pvcNamespace,
-		}, rd); err != nil {
-			if k8serrors.IsNotFound(err) {
-				log.V(1).Info("RD not found, skipping PVC disownership", "RD", rdName)
-
-				continue
-			}
-
-			log.Error(err, "Failed to get RD for PVC disownership", "RD", rdName)
-
-			return err
-		}
-
-		// Remove RD ownership from the PVC
-		if err := c.VSHandler.RemoveOwnerFromPVC(rd, pvcName, pvcNamespace); err != nil {
-			log.Error(err, "Failed to remove RD ownership from PVC", "RD", rdName, "PVC", pvcName)
-
-			return err
-		}
-	}
-
-	return nil
-}
-
-// disownRDManagedPVCsBeforeRGDDeletion disowns RD-managed PVCs before RGD deletion
-func (c *cgHandler) disownRDManagedPVCsBeforeRGDDeletion(
-	rgd *ramendrv1alpha1.ReplicationGroupDestination,
-	log logr.Logger,
-) error {
-	// Disown RD-managed PVCs before deleting RGD
-	if len(rgd.Spec.RDSpecs) > 0 {
-		if err := c.disownRDManagedPVCs(rgd.Spec.RDSpecs); err != nil {
-			log.Error(err, "Failed to disown RD-managed PVCs")
-
-			return err
-		}
-	}
-
-	return nil
 }
 
 //nolint:funlen,gocognit,cyclop,gocyclo
@@ -384,11 +233,6 @@ func (c *cgHandler) CreateOrUpdateReplicationGroupSource(
 				return nil, !finalSyncComplete, err
 			}
 		}
-	}
-
-	// Disown RD-managed PVCs (RDs own PVCs on secondary)
-	if err := c.disownRDManagedPVCsBeforeRGDDeletion(rgd, log); err != nil {
-		return nil, !finalSyncComplete, err
 	}
 
 	if err := util.DeleteReplicationGroupDestination(
@@ -493,16 +337,6 @@ func (c *cgHandler) CreateOrUpdateReplicationGroupSource(
 		return nil, !finalSyncComplete, err
 	}
 
-	// Ensure RSs own their corresponding PVCs to enable Kubernetes garbage collection
-	// when RSs are deleted (similar to RD ownership on secondary)
-	if len(rsSpecsWithProtectedPVC) > 0 {
-		if err := c.ensureRSsOwnTheirPVCs(rsSpecsWithProtectedPVC); err != nil {
-			log.Error(err, "Failed to ensure RSs own their PVCs")
-
-			return nil, !finalSyncComplete, err
-		}
-	}
-
 	//
 	// For final sync only - check status to make sure the final sync is complete
 	// and also run cleanup of temporary resources
@@ -569,87 +403,6 @@ func (c *cgHandler) buildRSSpecsFromRDSpecs(
 	}
 
 	return rsSpecs
-}
-
-// ensureRSsOwnTheirPVCs assigns each RS created from RSSpecs as owner of the corresponding PVC
-// This enables Kubernetes garbage collection to delete the PVC when the RS is deleted
-func (c *cgHandler) ensureRSsOwnTheirPVCs(rsSpecsInGroup []ramendrv1alpha1.VolSyncReplicationSourceSpec) error {
-	log := c.logger.WithName("ensureRSsOwnTheirPVCs")
-
-	for _, rsSpec := range rsSpecsInGroup {
-		pvcName := rsSpec.ProtectedPVC.Name
-		pvcNamespace := rsSpec.ProtectedPVC.Namespace
-
-		// The RS name is the same as the PVC name (following volsync handler pattern)
-		rsName := pvcName
-
-		// Get the RS object
-		rs := &volsyncv1alpha1.ReplicationSource{}
-		if err := c.Client.Get(c.ctx, types.NamespacedName{
-			Name:      rsName,
-			Namespace: pvcNamespace,
-		}, rs); err != nil {
-			if k8serrors.IsNotFound(err) {
-				log.V(1).Info("RS not found, skipping PVC ownership assignment", "RS", rsName)
-
-				continue
-			}
-
-			log.Error(err, "Failed to get RS for PVC ownership assignment", "RS", rsName)
-
-			return err
-		}
-
-		// Assign RS as owner of the PVC
-		if err := c.VSHandler.AssignRDAndRSAsOwnerToProtectedPVC(rs, rsSpec.ProtectedPVC); err != nil {
-			log.Error(err, "Failed to assign RS ownership to PVC", "RS", rsName, "PVC", pvcName)
-
-			return err
-		}
-	}
-
-	return nil
-}
-
-// disownRSManagedPVCs removes RS ownership from PVCs before RGS deletion
-// This ensures PVCs are not automatically deleted when RSs are removed
-func (c *cgHandler) disownRSManagedPVCs(rsSpecs []ramendrv1alpha1.VolSyncReplicationSourceSpec) error {
-	log := c.logger.WithName("disownRSManagedPVCs")
-
-	for _, rsSpec := range rsSpecs {
-		pvcName := rsSpec.ProtectedPVC.Name
-		pvcNamespace := rsSpec.ProtectedPVC.Namespace
-
-		// The RS name is the same as the PVC name (following volsync handler pattern)
-		rsName := pvcName
-
-		// Get the RS object
-		rs := &volsyncv1alpha1.ReplicationSource{}
-
-		if err := c.Client.Get(c.ctx, types.NamespacedName{
-			Name:      rsName,
-			Namespace: pvcNamespace,
-		}, rs); err != nil {
-			if k8serrors.IsNotFound(err) {
-				log.V(1).Info("RS not found, skipping PVC disownership", "RS", rsName)
-
-				continue
-			}
-
-			log.Error(err, "Failed to get RS for PVC disownership", "RS", rsName)
-
-			return err
-		}
-
-		// Remove RS ownership from the PVC
-		if err := c.VSHandler.RemoveOwnerFromPVC(rs, pvcName, pvcNamespace); err != nil {
-			log.Error(err, "Failed to remove RS ownership from PVC", "RS", rsName, "PVC", pvcName)
-
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (c *cgHandler) GetLatestImageFromRGD(rgd *ramendrv1alpha1.ReplicationGroupDestination, pvcName string,

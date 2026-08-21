@@ -4,9 +4,13 @@
 package dractions
 
 import (
+	"fmt"
+
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/ramendr/ramen/e2e/deployers"
 	"github.com/ramendr/ramen/e2e/types"
@@ -119,10 +123,6 @@ func DisableProtection(ctx types.TestContext) error {
 		log.Infof("Unprotecting workload in cluster %q", cluster.Name)
 	}
 
-	if err := annotateDRPCDoNotDeletePVC(ctx, name); err != nil {
-		return err
-	}
-
 	if err := deleteProtectionResources(ctx); err != nil {
 		return err
 	}
@@ -133,6 +133,10 @@ func DisableProtection(ctx types.TestContext) error {
 
 	// If the cluster is not nil, the workload exists and its health is validated.
 	if cluster != nil {
+		if err := validatePVCsExistAfterDisableProtection(ctx, cluster); err != nil {
+			return err
+		}
+
 		if err := ctx.Workload().Health(ctx, cluster); err != nil {
 			return err
 		}
@@ -337,6 +341,34 @@ func waitForProtectionResourcesDelete(ctx types.TestContext) error {
 			return err
 		}
 	}
+
+	return nil
+}
+
+func validatePVCsExistAfterDisableProtection(ctx types.TestContext, cluster *types.Cluster) error {
+	log := ctx.Logger()
+	appNamespace := ctx.AppNamespace()
+
+	pvcList := &corev1.PersistentVolumeClaimList{}
+	if err := cluster.Client.List(ctx.Context(), pvcList, client.InNamespace(appNamespace)); err != nil {
+		return fmt.Errorf("failed to list PVCs in namespace %q on cluster %q: %w", appNamespace, cluster.Name, err)
+	}
+
+	if len(pvcList.Items) == 0 {
+		return fmt.Errorf("no PVCs found in namespace %q on cluster %q after disabling protection",
+			appNamespace, cluster.Name)
+	}
+
+	for i := range pvcList.Items {
+		pvc := &pvcList.Items[i]
+		if pvc.Status.Phase != corev1.ClaimBound {
+			return fmt.Errorf("PVC %q in namespace %q on cluster %q is %s, expected Bound",
+				pvc.Name, appNamespace, cluster.Name, pvc.Status.Phase)
+		}
+	}
+
+	log.Debugf("Verified %d PVC(s) still exist and are Bound in namespace %q on cluster %q",
+		len(pvcList.Items), appNamespace, cluster.Name)
 
 	return nil
 }
