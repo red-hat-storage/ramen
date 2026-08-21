@@ -21,6 +21,7 @@ import (
 
 	ramen "github.com/ramendr/ramen/api/v1alpha1"
 	"github.com/ramendr/ramen/internal/controller/hooks"
+	"github.com/ramendr/ramen/internal/controller/hooks/common"
 	"github.com/ramendr/ramen/internal/controller/kubeobjects"
 	"github.com/ramendr/ramen/internal/controller/util"
 )
@@ -674,6 +675,20 @@ func (v *VRGInstance) kubeObjectsRecover(result *ctrl.Result) error {
 		return nil
 	}
 
+	// When static IP translation rules are present, the ResourceModifier ConfigMap
+	// must exist in the velero namespace before the restore runs — Velero will
+	// reject a Restore that references a missing ConfigMap.
+	// This covers the failover case where the VRG was previously secondary (the CM
+	// was created there) but may have been deleted or not yet reconciled on this
+	// cluster.  Create-or-update it now and gate the restore on its presence.
+	if hasStaticIPTranslation(v.instance) {
+		if err := v.ensureResourceModifierCM(result); err != nil {
+			result.Requeue = true
+
+			return err
+		}
+	}
+
 	for _, s3StoreAccessor := range v.s3StoreAccessors {
 		if err := v.kubeObjectsRecoverFromS3(result, s3StoreAccessor); err != nil {
 			v.log.Info("Kube objects restore error", "profile", s3StoreAccessor.S3ProfileName, "error", err)
@@ -895,6 +910,11 @@ func (v *VRGInstance) executeRecoverGroup(result *ctrl.Result, s3StoreAccessor s
 	labels map[string]string, groupNumber int,
 	rg kubeobjects.RecoverSpec, requests []kubeobjects.Request, log1 logr.Logger,
 ) error {
+	// Inject the static IP ResourceModifier reference when translation rules are present.
+	if hasStaticIPTranslation(v.instance) && rg.ResourceModifier == nil {
+		rg.ResourceModifier = v.resourceModifierRef()
+	}
+
 	sourceVrgName := v.instance.Name
 	sourceVrgNamespaceName := v.instance.Namespace
 	request, ok, submit, cleanup := v.getRecoverOrProtectRequest(
@@ -988,12 +1008,23 @@ func (v *VRGInstance) kubeObjectsProtectionDelete(result *ctrl.Result) error {
 	}
 
 	vrg := v.instance
+	veleroNS := v.veleroNamespaceName()
+	labels := util.OwnerLabels(vrg)
 
-	return v.kubeObjectsRecoverRequestsDelete(
-		result,
-		v.veleroNamespaceName(),
-		util.OwnerLabels(vrg),
-	)
+	if err := v.kubeObjectsRecoverRequestsDelete(result, veleroNS, labels); err != nil {
+		return err
+	}
+
+	// BSLs are kept alive across capture cycles and must be deleted explicitly here.
+	if err := v.reconciler.kubeObjects.ProtectBSLsDelete(v.ctx, v.reconciler.Client, veleroNS, labels); err != nil {
+		v.log.Error(err, "Kube objects BSLs delete error")
+
+		result.Requeue = true
+
+		return err
+	}
+
+	return nil
 }
 
 // mergeExcludedResources merges ConfigMap default exclusions with recipe-level exclusions.
@@ -1259,89 +1290,16 @@ func convertRecipeHookToRecoverSpec(hook Recipe.Hook, suffix string) (*kubeobjec
 	}, nil
 }
 
-// TODO: Return error as well or ensure that other than exec and check hooks are
+// TODO: Return error as well or ensure that other than exec, check, scale and job hooks are
 // handled properly.
 func getHookSpecFromHook(hook Recipe.Hook, suffix string) kubeobjects.HookSpec {
-	// based on hook.type, the hook is chks, ops or scale
-	switch hook.Type {
-	case "exec":
-		return getOpHookSpec(&hook, suffix)
-	case "check":
-		return getChkHookSpec(&hook, suffix)
-	case "scale":
-		return getScaleHookSpec(&hook, suffix)
-	default:
+	// Use common package for HookSpec creation
+	hookSpec := common.GetHookSpecFromRecipe(&hook, suffix)
+	if hookSpec == nil {
 		return kubeobjects.HookSpec{}
 	}
-}
 
-func getScaleHookSpec(hook *Recipe.Hook, suffix string) kubeobjects.HookSpec {
-	return kubeobjects.HookSpec{
-		Name:           hook.Name,
-		Namespace:      hook.Namespace,
-		Type:           hook.Type,
-		SelectResource: hook.SelectResource,
-		LabelSelector:  hook.LabelSelector,
-		NameSelector:   hook.NameSelector,
-		Essential:      hook.Essential,
-		Timeout:        hook.Timeout,
-		OnError:        hook.OnError,
-		// suffix will be up, down, or sync
-		Scale: kubeobjects.ScaleSpec{
-			Operation: suffix,
-		},
-	}
-}
-
-func getChkHookSpec(hook *Recipe.Hook, suffix string) kubeobjects.HookSpec {
-	for _, chk := range hook.Chks {
-		if chk.Name == suffix {
-			return kubeobjects.HookSpec{
-				Name:                 hook.Name,
-				Namespace:            hook.Namespace,
-				Type:                 hook.Type,
-				SelectResource:       hook.SelectResource,
-				LabelSelector:        hook.LabelSelector,
-				NameSelector:         hook.NameSelector,
-				Timeout:              chk.Timeout,
-				OnError:              chk.OnError,
-				SkipHookIfNotPresent: hook.SkipHookIfNotPresent,
-				Chk: kubeobjects.Check{
-					Name:      suffix,
-					Condition: chk.Condition,
-				},
-				Essential: hook.Essential,
-			}
-		}
-	}
-
-	return kubeobjects.HookSpec{}
-}
-
-func getOpHookSpec(hook *Recipe.Hook, suffix string) kubeobjects.HookSpec {
-	for _, op := range hook.Ops {
-		if op.Name == suffix {
-			return kubeobjects.HookSpec{
-				Name:           hook.Name,
-				Namespace:      hook.Namespace,
-				Type:           hook.Type,
-				Timeout:        hook.Timeout,
-				OnError:        hook.OnError,
-				SelectResource: hook.SelectResource,
-				LabelSelector:  hook.LabelSelector,
-				NameSelector:   hook.NameSelector,
-				SinglePodOnly:  hook.SinglePodOnly,
-				Op: kubeobjects.Operation{
-					Name:      suffix,
-					Container: op.Container,
-					Command:   op.Command,
-					InverseOp: op.InverseOp,
-				},
-			}
-		}
-	}
-
-	return kubeobjects.HookSpec{}
+	return *hookSpec
 }
 
 func convertRecipeGroupToRecoverSpec(group Recipe.Group) (*kubeobjects.RecoverSpec, error) {

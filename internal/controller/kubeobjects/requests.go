@@ -61,6 +61,10 @@ type RecoverSpec struct {
 	RestoreStatus *velero.RestoreStatusSpec `json:"restoreStatus,omitempty"`
 	//+optional
 	ExistingResourcePolicy velero.PolicyType `json:"existingResourcePolicy,omitempty"`
+	//+optional
+	// ResourceModifier specifies the ConfigMap reference for Velero resource modifier rules
+	// applied during restore (e.g. static IP translation).
+	ResourceModifier *corev1.TypedLocalObjectReference `json:"resourceModifier,omitempty"`
 }
 
 type Spec struct {
@@ -94,7 +98,7 @@ type KubeResourcesSpec struct {
 	GroupEssential *bool `json:"essential,omitempty"`
 }
 
-// HookSpec provides spec of either check or exec hook that needs to be executed
+// HookSpec provides spec of either check, exec, scale, or job hook that needs to be executed
 type HookSpec struct {
 	Name           string                `json:"name"`
 	Namespace      string                `json:"namespace"`
@@ -118,6 +122,8 @@ type HookSpec struct {
 	Chk Check `json:"check,omitempty"`
 
 	Scale ScaleSpec `json:"scale,omitempty"`
+
+	Job JobSpec `json:"job,omitempty"`
 }
 
 type ScaleSpec struct {
@@ -150,6 +156,19 @@ type Operation struct {
 	InverseOp string `json:"inverseOp,omitempty"`
 }
 
+type JobSpec struct {
+	// Name of the job. Should be unique within the hook
+	Name string `json:"name"`
+	// How to handle job failure. Defaults to Fail.
+	OnError string `json:"onError,omitempty"`
+	// How long to wait for the job to complete, in seconds
+	Timeout int `json:"timeout,omitempty"`
+	// Name of another job that reverts the effect of this job (e.g. backup vs. restore)
+	InverseOp string `json:"inverseOp,omitempty"`
+	// Whether to create the Job or not if it already exists. Default to false.
+	ForceCreate *bool `json:"forceCreate,omitempty"`
+}
+
 func RequestProcessingErrorCreate(s string) RequestProcessingError { return RequestProcessingError{s} }
 func (e RequestProcessingError) Error() string                     { return e.string }
 
@@ -160,6 +179,7 @@ func (RequestProcessingError) Is(target error) bool {
 	return ok
 }
 
+//nolint:interfacebloat
 type RequestsManager interface {
 	ProtectsPath() string
 	RecoversPath() string
@@ -201,6 +221,10 @@ type RequestsManager interface {
 	RecoverRequestsGet(
 		c context.Context, r client.Reader, requestNamespaceName string, labels map[string]string,
 	) (Requests, error)
+	// ProtectRequestsDelete deletes Backup objects only; BSLs are kept alive for reuse
+	// across capture cycles and cleaned up only via ProtectBSLsDelete on VRG deletion.
 	ProtectRequestsDelete(c context.Context, w client.Writer, requestNamespaceName string, labels map[string]string) error
 	RecoverRequestsDelete(c context.Context, w client.Writer, requestNamespaceName string, labels map[string]string) error
+	// ProtectBSLsDelete deletes all BSLs owned by the VRG, called only on VRG deletion.
+	ProtectBSLsDelete(c context.Context, w client.Writer, requestNamespaceName string, labels map[string]string) error
 }

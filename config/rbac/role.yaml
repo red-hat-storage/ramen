@@ -154,6 +154,12 @@ rules:
   - update
   - watch
 - apiGroups:
+  - batch
+  resources:
+  - jobs/status
+  verbs:
+  - get
+- apiGroups:
   - cdi.kubevirt.io
   resources:
   - datavolumes
@@ -254,6 +260,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - k8s.cni.cncf.io
+  resources:
+  - network-attachment-definitions
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - kubevirt.io

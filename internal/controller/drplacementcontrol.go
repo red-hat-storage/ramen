@@ -50,6 +50,11 @@ const (
 
 	// Annotation for the last action performed on the DRPC
 	DRPCLastAction = "drplacementcontrol.ramendr.openshift.io/last-action"
+
+	// DRPCNetworkMappingAnnotation references a ConfigMap (by name, same namespace) that
+	// holds the bidirectional cluster-pair network subnet mappings for VM static-IP translation.
+	// Value is the ConfigMap name; namespace defaults to the DRPC namespace.
+	DRPCNetworkMappingAnnotation = "drplacementcontrol.ramendr.openshift.io/network-mapping"
 )
 
 var (
@@ -84,6 +89,7 @@ type DRPCInstance struct {
 	mwu                  rmnutil.MWUtil
 	drType               DRType
 	requeueAfter         time.Duration
+	networkMappingRules  *NetworkMappingRules
 }
 
 func (d *DRPCInstance) startProcessing() bool {
@@ -350,17 +356,11 @@ func validateTestFailoverRevertScenario(drpc *rmn.DRPlacementControl, _ string) 
 		return rmn.Relocated, nil
 
 	case "":
-		// Saved action was empty: User must set action="" and failoverCluster=""
+		// Saved action was empty: User must set action="" to return to Deployed state
 		if drpc.Spec.Action != "" {
 			return "", fmt.Errorf(
 				"revert validation failed: saved last-action=empty requires action=empty, got action=%s",
 				drpc.Spec.Action)
-		}
-
-		if drpc.Spec.FailoverCluster != "" {
-			return "", fmt.Errorf(
-				"revert validation failed: saved last-action=empty requires failoverCluster=empty, got %s",
-				drpc.Spec.FailoverCluster)
 		}
 
 		return rmn.Deployed, nil
@@ -779,8 +779,8 @@ func (d *DRPCInstance) RunFailover() (bool, error) {
 		// in case of an error, try again later
 		return !done, err
 	}
-	// Use the DRPC Protected condition to check if it is true and then allow failover
-	if d.instance.Spec.DryRun && !d.isProtected() {
+	// For dry-run: block until workload is protected and replication is current.
+	if d.instance.Spec.DryRun && !d.dryRunReadyToFailover() {
 		return !done, nil
 	}
 
@@ -807,6 +807,42 @@ func (d *DRPCInstance) isProtected() bool {
 		metav1.ConditionFalse, string(d.instance.Status.Phase), msg)
 
 	return false
+}
+
+// dryRunReadyToFailover returns true when the workload is protected and replication is current,
+// meaning a dry-run test failover can safely proceed.
+func (d *DRPCInstance) dryRunReadyToFailover() bool {
+	return d.isProtected() && !d.isGroupSyncLagging()
+}
+
+// isGroupSyncLagging reports true when the most recent group sync is older than 3× the DRPolicy scheduling interval,
+// meaning replication has fallen behind and a dry-run test failover would not reflect current data.
+// Returns false if the scheduling interval cannot be parsed.
+func (d *DRPCInstance) isGroupSyncLagging() bool {
+	if d.instance.Status.LastGroupSyncTime == nil {
+		return false
+	}
+
+	intervalSecs, err := rmnutil.GetSecondsFromSchedulingInterval(d.drPolicy)
+	if err != nil {
+		return false
+	}
+
+	lag := time.Since(d.instance.Status.LastGroupSyncTime.Time.UTC())
+
+	if lag <= 3*time.Duration(intervalSecs)*time.Second {
+		return false
+	}
+
+	const msg = "cannot start dry-run failover: lastGroupSyncTime is lagging behind," +
+		" check workload and cluster replication state"
+
+	d.log.Info("Dry-run failover blocked", "reason", msg)
+
+	addOrUpdateCondition(&d.instance.Status.Conditions, rmn.ConditionAvailable, d.instance.Generation,
+		metav1.ConditionFalse, string(d.instance.Status.Phase), msg)
+
+	return true
 }
 
 // isValidFailoverTarget determines if the passed in cluster is a valid target to failover to. A valid failover target
@@ -1375,6 +1411,12 @@ func (d *DRPCInstance) ensureCleanupAndSecondaryReplicationSetup(srcCluster stri
 	err := d.ResetVolSyncRDOnPrimary(srcCluster)
 	if err != nil {
 		return err
+	}
+
+	err = d.ResetVMStaticIPSpecOnPrimary(srcCluster)
+	if err != nil {
+		d.log.Error(err, "Failed to reset VM static-IP configuration on primary cluster; continuing reconciliation",
+			"sourceCluster", srcCluster)
 	}
 
 	// Check if the reset has already been applied. ResetVolSyncRDOnPrimary resets the VRG
@@ -2241,6 +2283,7 @@ func (d *DRPCInstance) updateVRGDRTypeSpec(vrgFromCluster, generatedVRG *rmn.Vol
 //   - Spec.PrepareForFinalSync
 //   - Spec.RunFinalSync
 //   - Spec.VolSync.RDSpec
+//   - Spec.StaticIPTranslationSpec
 //
 // These fields are either set during the initial creation of the VRG (e.g., name and namespace)
 // or updated as needed, such as the PrepareForFinalSync and RunFinalSync fields.
@@ -2249,6 +2292,9 @@ func (d *DRPCInstance) updateVRGOptionalFields(vrg, vrgFromView *rmn.VolumeRepli
 	d.setVRGSpecFields(vrg)
 	d.updateVRGDRTypeSpecIfNeeded(vrg, vrgFromView)
 	d.updateMoverConfigIfNeeded(vrg)
+	// Inject static IP translation spec for secondary VRG.
+	// Reads primary VRG's discovery status and maps to target IPs from DRPC spec.
+	d.updateVRGStaticIPTranslationSpec(vrg, homeCluster)
 }
 
 // setVRGAnnotations sets all VRG annotations from DRPC
@@ -2952,6 +2998,13 @@ func (d *DRPCInstance) setDRState(nextState rmn.DRState) {
 
 		d.instance.Status.Phase = nextState
 		d.instance.Status.ObservedGeneration = d.instance.Generation
+
+		// Account the transition at the moment it happens, so that a
+		// multi-phase transition within a single reconcile cannot skip
+		// over an action phase unaccounted. Persisted by the reconciler
+		// along with the status update.
+		syncDRActionCountAnnotation(d.instance)
+
 		d.reportEvent(nextState)
 	}
 }
@@ -3411,16 +3464,9 @@ func (d *DRPCInstance) setDiscoveredAppGCProgression(clusterName string) {
 			d.setProgression(rmn.ProgressionWaitOnUserToCleanUp)
 		}
 	} else {
-		// For non-VM discovered apps, check if VRG has reached Secondary state
-		// indicating that manual cleanup is complete
-		vrg := d.getCleanupSecondaryVRG(clusterName)
-		if vrg != nil && vrg.Status.State == rmn.SecondaryState && vrg.Status.ObservedGeneration == vrg.Generation {
-			d.log.V(1).Info("Setting progression - Cleaning Up (non-VM app cleanup complete, VRG is Secondary)")
-			d.setProgression(rmn.ProgressionCleaningUp)
-		} else {
-			d.log.V(1).Info("Setting progression - WaitOnUserToCleanUp (waiting for manual cleanup)")
-			d.setProgression(rmn.ProgressionWaitOnUserToCleanUp)
-		}
+		// For non-VM discovered apps, always wait for user to manually delete workload.
+		// VRG state transitions are automatic and independent of user cleanup actions.
+		d.setProgression(rmn.ProgressionWaitOnUserToCleanUp)
 	}
 }
 
@@ -3559,4 +3605,251 @@ func mapsEqual(a, b map[string]string) bool {
 	}
 
 	return reflect.DeepEqual(a, b)
+}
+
+// buildStaticIPTranslationSpec constructs the StaticIPTranslationSpec for a
+// recovery-target VRG using static IP discovery data from the source cluster
+// selected by DRPC placement intent.
+//
+// Source IPs are read from the source VRG's status.staticIPDiscovery. Target
+// IPs are either preserved (same-cluster recovery) or translated using the
+// configured network-mapping rules. The resulting translations are grouped by
+// protected resource and network.
+//
+// Returns nil when the source VRG is unavailable or when no static IP discovery
+// data has been reported.
+func (d *DRPCInstance) buildStaticIPTranslationSpec(
+	primaryCluster string,
+	homeCluster string,
+) *rmn.StaticIPTranslationSpec {
+	primaryVRG := d.vrgs[primaryCluster]
+
+	if primaryVRG == nil {
+		return nil
+	}
+
+	if primaryVRG.Status.StaticIPDiscoveryStatus == nil ||
+		len(primaryVRG.Status.StaticIPDiscoveryStatus.Resources) == 0 {
+		d.log.Info("Discovered Static IP data from primary cluster is nil")
+
+		return nil
+	}
+
+	primaryDisc := primaryVRG.Status.StaticIPDiscoveryStatus
+	sameCluster := primaryCluster == homeCluster
+
+	var resources []rmn.IPTranslationSpec
+
+	for _, pRes := range primaryDisc.Resources {
+		var networks []rmn.NetworkTranslation
+
+		for _, pNet := range pRes.Networks {
+			var addrs []rmn.AddressTranslation
+
+			nadNamespace, nadName := ParseNetworkName(pNet.NetworkName, pRes.ResourceRef.Namespace)
+			for _, srcIP := range pNet.Addresses {
+				d.log.Info("Source IP for translation", "ip", srcIP)
+
+				targetIP := srcIP
+				if !sameCluster {
+					d.log.Info("Clusters are not same, hence translation required", "primaryCluster:", primaryCluster,
+						"homeCluster:", homeCluster, "srcIP:", srcIP)
+					// derived from network mapping
+					targetIP = d.translateSourceIP(srcIP, primaryCluster, NetworkRef{nadNamespace, nadName})
+				}
+
+				d.log.Info("Updating Spec with IP", "targetIP:", targetIP)
+				addrs = append(addrs, rmn.AddressTranslation{
+					TargetIP: targetIP,
+				})
+			}
+
+			networks = append(networks, rmn.NetworkTranslation{
+				NetworkName: pNet.NetworkName,
+				Addresses:   addrs,
+			})
+		}
+
+		resources = append(resources, rmn.IPTranslationSpec{
+			ResourceRef: pRes.ResourceRef,
+			Networks:    networks,
+		})
+	}
+
+	return &rmn.StaticIPTranslationSpec{IPTranslations: resources}
+}
+
+// updateVRGStaticIPTranslationSpec sets spec.staticIPTranslationSpec on the VRG
+// being written to homeCluster. On the primary cluster the field is left nil —
+// the primary VRG only writes to status, never reads from spec for this feature.
+// On the secondary cluster, the field is populated from primary discovery + DRPC mapping.
+func (d *DRPCInstance) updateVRGStaticIPTranslationSpec(
+	vrg *rmn.VolumeReplicationGroup,
+	homeCluster string,
+) {
+	shouldInject, reason := d.shouldInjectStaticIPTranslationSpec(vrg)
+
+	if !shouldInject {
+		d.log.Info(
+			"Skipping static IP translation spec update",
+			"reason", reason,
+			"replicationState", vrg.Spec.ReplicationState,
+			"statusState", vrg.Status.State,
+			"current cluster", vrg.GetAnnotations()[DestinationClusterAnnotationKey],
+		)
+
+		return
+	}
+
+	primaryCluster := d.currentPrimaryCluster()
+
+	if primaryCluster == "" {
+		d.log.Info("No primary VRG found")
+
+		return
+	}
+
+	d.log.Info(
+		"Building StaticIPTranslationSpec from primary VRG status",
+		"sourceCluster", primaryCluster,
+		"targetCluster", homeCluster,
+	)
+
+	newSpec := d.buildStaticIPTranslationSpec(primaryCluster, homeCluster)
+	if newSpec == nil {
+		d.log.Info(
+			"No static IP discovery data available yet from primary cluster; skipping update",
+			"sourceCluster", primaryCluster,
+		)
+
+		return
+	}
+
+	if !d.setStaticIPTranslationSpec(vrg, newSpec) {
+		d.log.Info("StaticIPTranslationSpec unchanged")
+
+		return
+	}
+
+	d.log.Info(
+		"Applied StaticIPTranslationSpec to VRG",
+		"resourceCount", len(newSpec.IPTranslations),
+		"sourceCluster", primaryCluster,
+		"targetCluster", homeCluster,
+	)
+}
+
+// shouldInjectStaticIPTranslationSpec returns whether the VRG is eligible
+// for StaticIPTranslationSpec injection and, when not eligible, provides
+// the reason for skipping the update.
+func (d *DRPCInstance) shouldInjectStaticIPTranslationSpec(
+	vrg *rmn.VolumeReplicationGroup,
+) (bool, string) {
+	if !d.isVMRecipeInUse() {
+		return false, "VM recipe not in use"
+	}
+
+	if len(d.instance.Status.ResourceConditions.ResourceMeta.ProtectedStaticIPVMs) == 0 {
+		return false, "VMs are not configured with static IP."
+	}
+
+	if vrg.Spec.ReplicationState != rmn.Secondary {
+		return false, "VRG replication state is not Secondary"
+	}
+
+	return true, ""
+}
+
+// ResetVMStaticIPSpecOnPrimary clears StaticIPTranslationSpec from the
+// primary VRG once recovery completes or translation injection is no longer
+// required. The translation spec is transient recovery metadata used during
+// restore on secondary clusters and should not remain configured on the
+// promoted primary after failover/relocation.
+func (d *DRPCInstance) ResetVMStaticIPSpecOnPrimary(clusterName string) error {
+	if !d.isVMRecipeInUse() {
+		return nil
+	}
+
+	mw, err := d.mwu.FindManifestWorkByType(rmnutil.MWTypeVRG, clusterName)
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+
+		d.log.Error(err, "failed to find VRG ManifestWork", "cluster", clusterName)
+
+		return fmt.Errorf("failed to lookup VRG ManifestWork for cluster %s (%w)",
+			clusterName, err)
+	}
+
+	d.log.Info(fmt.Sprintf("Resetting staticIPTranslationSpec VRG ownedby MW %s for cluster %s", mw.Name, clusterName))
+
+	vrg, err := rmnutil.ExtractVRGFromManifestWork(mw)
+	if err != nil {
+		d.log.Error(err, "failed to extract VRG state")
+
+		return err
+	}
+
+	// No static-IP VMs remain; clear any previously injected translation spec
+	// to avoid stale IP mappings being applied during future restores.
+	if len(d.instance.Status.ResourceConditions.ResourceMeta.ProtectedStaticIPVMs) == 0 {
+		d.log.Info("VMs are not configured with static IPs.")
+
+		if !d.setStaticIPTranslationSpec(vrg, nil) {
+			return nil
+		}
+
+		return d.mwu.UpdateVRGManifestWork(vrg, mw)
+	}
+
+	if vrg.Spec.ReplicationState != rmn.Primary {
+		d.log.Info(fmt.Sprintf("VRG %s not primary on this cluster %s", vrg.Name, mw.Namespace))
+
+		return fmt.Errorf("vrg %s is not set as primary on this cluster, %s", vrg.Name, mw.Namespace)
+	}
+
+	if vrg.Spec.StaticIPTranslationSpec == nil {
+		d.log.Info(fmt.Sprintf("StaticIPTranslationSpec for %s has already been cleared on this cluster %s",
+			vrg.Name, mw.Namespace))
+
+		return nil
+	}
+
+	vrg.Spec.StaticIPTranslationSpec = nil
+
+	return d.mwu.UpdateVRGManifestWork(vrg, mw)
+}
+
+// currentPrimaryCluster returns the cluster that DRPC currently intends to
+// be primary. The value is derived from DRPC spec/action state rather than
+// VRG status to avoid nondeterministic selection when multiple VRGs
+// temporarily report Primary during failover or relocation transitions.
+func (d *DRPCInstance) currentPrimaryCluster() string {
+	switch d.instance.Spec.Action {
+	case rmn.ActionFailover:
+		return d.instance.Spec.FailoverCluster
+
+	case rmn.ActionRelocate:
+		return d.instance.Spec.PreferredCluster
+
+	default:
+		return d.instance.Spec.PreferredCluster
+	}
+}
+
+// setStaticIPTranslationSpec updates StaticIPTranslationSpec only when the
+// desired value differs from the current value. A nil spec clears the field.
+// Returns true when the VRG spec was modified.
+func (d *DRPCInstance) setStaticIPTranslationSpec(
+	vrg *rmn.VolumeReplicationGroup,
+	spec *rmn.StaticIPTranslationSpec,
+) bool {
+	if reflect.DeepEqual(vrg.Spec.StaticIPTranslationSpec, spec) {
+		return false
+	}
+
+	vrg.Spec.StaticIPTranslationSpec = spec
+
+	return true
 }
