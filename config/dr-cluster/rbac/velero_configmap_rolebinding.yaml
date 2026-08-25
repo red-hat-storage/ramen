@@ -6,7 +6,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: ramen-velero-configmap-manager
-  namespace: velero  # This should match the Velero installation namespace
+  namespace: openshift-adp  # This should match the Velero installation namespace
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
