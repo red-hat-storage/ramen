@@ -14,6 +14,8 @@ import subprocess
 import sys
 import time
 
+from .. import git
+
 PROGRESS = (
     "[%(done)d/%(runs)d] "
     "%(passed)d passed, "
@@ -29,7 +31,7 @@ def command(args):
     test = {
         "start_time": int(time.time()),
         "host": host_info(),
-        "git": git_info(),
+        "git": git.info(),
         "config": {
             "runs": args.runs,
             "envfile": args.envfile,
@@ -207,18 +209,6 @@ def linux_info():
         "memory_gb": mem / 2**30,
         "python": platform.python_version(),
     }
-
-
-def git_info():
-    return {
-        "commit": git("rev-parse", "HEAD"),
-        "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
-    }
-
-
-def git(*args):
-    cmd = ["git", *args]
-    return subprocess.check_output(cmd).decode().strip()
 
 
 def sysctl(name):
