@@ -61,17 +61,21 @@ const NoS3StoreAvailable = "NoS3"
 
 var ControllerType ramendrv1alpha1.ControllerType
 
-func DefaultRamenConfig(controllerType ramendrv1alpha1.ControllerType) *ramendrv1alpha1.RamenConfig {
-	var leaderElectionResourceName string
-
+// LeaderElectionResourceName returns the leader election lease name for the
+// given controller type.
+func LeaderElectionResourceName(controllerType ramendrv1alpha1.ControllerType) string {
 	switch controllerType {
 	case ramendrv1alpha1.DRHubType:
-		leaderElectionResourceName = HubLeaderElectionResourceName
+		return HubLeaderElectionResourceName
 	case ramendrv1alpha1.DRClusterType:
-		leaderElectionResourceName = drClusterLeaderElectionResourceName
+		return drClusterLeaderElectionResourceName
 	default:
 		panic(fmt.Sprintf("unknown controller type %q", controllerType))
 	}
+}
+
+func DefaultRamenConfig(controllerType ramendrv1alpha1.ControllerType) *ramendrv1alpha1.RamenConfig {
+	leaderElectionResourceName := LeaderElectionResourceName(controllerType)
 
 	leaderElect := true
 
@@ -109,9 +113,7 @@ func DefaultRamenConfig(controllerType ramendrv1alpha1.ControllerType) *ramendrv
 	return cfg
 }
 
-func LoadControllerConfig(configFile string,
-	log logr.Logger,
-) (ramenConfig *ramendrv1alpha1.RamenConfig) {
+func LoadControllerConfig(log logr.Logger) (ramenConfig *ramendrv1alpha1.RamenConfig) {
 	controllerType := os.Getenv("RAMEN_CONTROLLER_TYPE")
 	if controllerType == "" {
 		panic(fmt.Errorf("RAMEN_CONTROLLER_TYPE environment variable must be set"))
@@ -130,35 +132,65 @@ func LoadControllerConfig(configFile string,
 	return DefaultRamenConfig(ct)
 }
 
-func LoadControllerOptions(options *ctrl.Options, ramenConfig *ramendrv1alpha1.RamenConfig) {
-	if ramenConfig == nil {
-		return
+// DeprecatedManagerOptionWarnings returns a warning for each manager option
+// still present in the RamenConfig that differs from the effective manager
+// options. These RamenConfig fields are deprecated and ignored: the manager
+// options are set only via command line flags.
+func DeprecatedManagerOptionWarnings(ramenConfig *ramendrv1alpha1.RamenConfig, options *ctrl.Options) []string {
+	var warnings []string
+
+	deprecated := func(field, configValue, effectiveValue, flag string) {
+		warnings = append(warnings, fmt.Sprintf(
+			"RamenConfig %s %q is deprecated and ignored; the manager uses %q from the %s flag",
+			field, configValue, effectiveValue, flag))
 	}
 
-	options.HealthProbeBindAddress = ramenConfig.Health.HealthProbeBindAddress
+	if address := ramenConfig.Health.HealthProbeBindAddress; address != "" &&
+		address != options.HealthProbeBindAddress {
+		deprecated("health.healthProbeBindAddress", address,
+			options.HealthProbeBindAddress, "--health-probe-bind-address")
+	}
 
-	if ramenConfig.Metrics.BindAddress == "0" {
-		options.Metrics = metricsserver.Options{BindAddress: "0"}
-	} else {
-		// Use /etc/metrics-certs for OpenShift Service CA or
-		// cert-manager certs. Falls back to auto-generated certs if
-		// directory doesn't exist
-		options.Metrics = metricsserver.Options{
-			BindAddress:    ramenConfig.Metrics.BindAddress,
-			SecureServing:  true,
-			CertDir:        "/etc/metrics-certs",
-			FilterProvider: filters.WithAuthenticationAndAuthorization,
-		}
+	if address := ramenConfig.Metrics.BindAddress; address != "" &&
+		address != options.Metrics.BindAddress {
+		deprecated("metrics.bindAddress", address,
+			options.Metrics.BindAddress, "--metrics-bind-address")
 	}
 
 	if ramenConfig.LeaderElection != nil {
-		if ramenConfig.LeaderElection.LeaderElect != nil {
-			options.LeaderElection = *ramenConfig.LeaderElection.LeaderElect
+		if leaderElect := ramenConfig.LeaderElection.LeaderElect; leaderElect != nil &&
+			*leaderElect != options.LeaderElection {
+			deprecated("leaderElection.leaderElect", fmt.Sprintf("%t", *leaderElect),
+				fmt.Sprintf("%t", options.LeaderElection), "--leader-elect")
 		}
 
-		if ramenConfig.LeaderElection.ResourceName != "" {
-			options.LeaderElectionID = ramenConfig.LeaderElection.ResourceName
+		if name := ramenConfig.LeaderElection.ResourceName; name != "" &&
+			name != options.LeaderElectionID {
+			warnings = append(warnings, fmt.Sprintf(
+				"RamenConfig leaderElection.resourceName %q is deprecated and ignored; "+
+					"the manager uses %q derived from the controller type",
+				name, options.LeaderElectionID))
 		}
+	}
+
+	return warnings
+}
+
+// MetricsServerOptions returns the manager metrics server options for the
+// given bind address. A bind address of "0" disables the metrics server.
+func MetricsServerOptions(bindAddress string) metricsserver.Options {
+	if bindAddress == "0" {
+		return metricsserver.Options{BindAddress: "0"}
+	}
+
+	// Use /etc/metrics-certs for OpenShift Service CA or
+	// cert-manager certs. Falls back to auto-generated certs if
+	// directory doesn't exist
+	return metricsserver.Options{
+		BindAddress:    bindAddress,
+		SecureServing:  true,
+		CertDir:        "/etc/metrics-certs",
+		FilterProvider: filters.WithAuthenticationAndAuthorization,
 	}
 }
 
