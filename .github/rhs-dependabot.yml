@@ -1,0 +1,438 @@
+# SPDX-FileCopyrightText: The RamenDR authors
+# SPDX-License-Identifier: Apache-2.0
+
+---
+version: 2
+updates:
+  # Version updates for supported product branches only (not main).
+  # GitHub reads this file from the default branch; target-branch
+  # selects the manifests and PR base. Directory lists match what
+  # exists on each branch. Skip pip /test, /ramendev, /ramenctl
+  # (local drenv / unpinned setup.py) and docker (ARG Go image plus
+  # untagged ubi-minimal) on product branches.
+
+  # --- release-5.0 ---
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    target-branch: "release-5.0"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-root:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "gomod"
+    directory: "/api"
+    target-branch: "release-5.0"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-api:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "gomod"
+    directory: "/e2e"
+    target-branch: "release-5.0"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-e2e:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "gomod"
+    directory: "/test/timestamp"
+    target-branch: "release-5.0"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-timestamp:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    target-branch: "release-5.0"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "release-5.0"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  # --- release-4.22 ---
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    target-branch: "release-4.22"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-root:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "gomod"
+    directory: "/api"
+    target-branch: "release-4.22"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-api:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "gomod"
+    directory: "/e2e"
+    target-branch: "release-4.22"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-e2e:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    target-branch: "release-4.22"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "release-4.22"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  # --- release-4.21 ---
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    target-branch: "release-4.21"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-root:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "gomod"
+    directory: "/api"
+    target-branch: "release-4.21"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-api:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "gomod"
+    directory: "/e2e"
+    target-branch: "release-4.21"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-e2e:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    target-branch: "release-4.21"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "release-4.21"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  # --- release-4.20 ---
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    target-branch: "release-4.20"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-root:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "gomod"
+    directory: "/api"
+    target-branch: "release-4.20"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-api:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "gomod"
+    directory: "/e2e"
+    target-branch: "release-4.20"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-e2e:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    target-branch: "release-4.20"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "release-4.20"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  # --- release-4.18 ---
+
+  - package-ecosystem: "gomod"
+    directory: "/"
+    target-branch: "release-4.18"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-root:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "gomod"
+    directory: "/api"
+    target-branch: "release-4.18"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-api:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "gomod"
+    directory: "/e2e"
+    target-branch: "release-4.18"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    groups:
+      go-e2e:
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "k8s.io/*"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    target-branch: "release-4.18"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    target-branch: "release-4.18"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
