@@ -1886,6 +1886,9 @@ func (r *DRPlacementControlReconciler) setDRPCMetrics(ctx context.Context,
 	globalActionMetrics := r.createGlobalActionMetricsInstance(drpc)
 	r.setGlobalActionMetric(drpc, globalActionMetrics, log)
 
+	// Set progression state metric for both Metro and Regional DR
+	r.setDRProgressionStateMetric(drpc, &DRProgressionStateMetrics{}, log)
+
 	drPolicy, err := GetDRPolicy(ctx, r.Client, drpc, log)
 	if err != nil {
 		return fmt.Errorf("failed to get DRPolicy %w", err)
@@ -1915,8 +1918,6 @@ func (r *DRPlacementControlReconciler) setDRPCMetrics(ctx context.Context,
 		r.setLastSyncDurationMetric(&syncMetrics.SyncDurationMetrics, drpc.Status.LastGroupSyncDuration, log)
 		r.setLastSyncBytesMetric(&syncMetrics.SyncDataBytesMetrics, drpc.Status.LastGroupSyncBytes, log)
 	}
-
-	r.setDRProgressionStateMetric(drpc, &DRProgressionStateMetrics{}, log)
 
 	return nil
 }
