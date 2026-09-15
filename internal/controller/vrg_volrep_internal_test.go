@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -161,6 +162,59 @@ func TestVolRepSecondaryConflictSuppressedWhileDRActionInProgress(t *testing.T) 
 
 	if cond := v.validateSecondaryPVCConflictForVolRep(); cond != nil {
 		t.Errorf("validateSecondaryPVCConflictForVolRep() = %+v, want nil while DR action is in progress", cond)
+	}
+}
+
+func TestAggregateVolRepReplicationHealthyCondition(t *testing.T) {
+	t.Parallel()
+
+	vrg := &VRGInstance{instance: &ramendrv1alpha1.VolumeReplicationGroup{
+		ObjectMeta: metav1.ObjectMeta{Generation: 1},
+		Status: ramendrv1alpha1.VolumeReplicationGroupStatus{
+			ProtectedPVCs: []ramendrv1alpha1.ProtectedPVC{{
+				Name: "pvc-a",
+				Conditions: []metav1.Condition{{
+					Type:               VRGConditionTypeReplicationHealthy,
+					Status:             metav1.ConditionFalse,
+					Reason:             VRGConditionReasonError,
+					ObservedGeneration: 1,
+				}},
+			}},
+		},
+	}}
+
+	cond := vrg.aggregateVolRepReplicationHealthyCondition()
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("got %+v, want False", cond)
+	}
+}
+
+func TestUpdateDRPCReplicationHealthyCondition(t *testing.T) {
+	t.Parallel()
+
+	drpc := &ramendrv1alpha1.DRPlacementControl{ObjectMeta: metav1.ObjectMeta{Generation: 1}}
+	vrg := &ramendrv1alpha1.VolumeReplicationGroup{
+		ObjectMeta: metav1.ObjectMeta{Generation: 1},
+		Status: ramendrv1alpha1.VolumeReplicationGroupStatus{
+			Conditions: []metav1.Condition{{
+				Type:               VRGConditionTypeReplicationHealthy,
+				Status:             metav1.ConditionFalse,
+				Reason:             VRGConditionReasonError,
+				ObservedGeneration: 1,
+			}},
+		},
+	}
+
+	updateDRPCReplicationHealthyCondition(drpc, vrg)
+
+	if cond := meta.FindStatusCondition(drpc.Status.Conditions, ramendrv1alpha1.ConditionReplicationHealthy); cond == nil {
+		t.Fatal("ReplicationHealthy missing")
+	}
+
+	updateDRPCReplicationHealthyCondition(drpc, &ramendrv1alpha1.VolumeReplicationGroup{})
+
+	if cond := meta.FindStatusCondition(drpc.Status.Conditions, ramendrv1alpha1.ConditionReplicationHealthy); cond != nil {
+		t.Errorf("ReplicationHealthy = %+v, want absent", cond)
 	}
 }
 
