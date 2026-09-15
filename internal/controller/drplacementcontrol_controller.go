@@ -1867,9 +1867,6 @@ func (r *DRPlacementControlReconciler) setDRPCMetrics(ctx context.Context,
 	// Set progression state metric for both Metro and Regional DR
 	r.setDRProgressionStateMetric(drpc, &DRProgressionStateMetrics{})
 
-	// Set progression state metric for both Metro and Regional DR
-	r.setDRProgressionStateMetric(drpc, &DRProgressionStateMetrics{}, log)
-
 	drPolicy, err := GetDRPolicy(ctx, r.Client, drpc, log)
 	if err != nil {
 		return fmt.Errorf("failed to get DRPolicy %w", err)
