@@ -3248,7 +3248,6 @@ func (r *DRPlacementControlReconciler) switchPlacementRuleClusterDecisionRetainF
 	return nil
 }
 
-
 // switchPlacementClusterDecisionRetainFailover updates decisions so that the reason
 // PlacementDecisionReasonFailoverRetained is removed from clusterName (reverting it to clusterName),
 // and applied to any other cluster decisions.
