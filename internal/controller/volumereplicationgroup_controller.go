@@ -51,18 +51,19 @@ import (
 // VolumeReplicationGroupReconciler reconciles a VolumeReplicationGroup object
 type VolumeReplicationGroupReconciler struct {
 	client.Client
-	APIReader               client.Reader
-	Log                     logr.Logger
-	ObjStoreGetter          ObjectStoreGetter
-	Scheme                  *runtime.Scheme
-	eventRecorder           *util.EventReporter
-	kubeObjects             kubeobjects.RequestsManager
-	RateLimiter             *workqueue.TypedRateLimiter[reconcile.Request]
-	veleroCRsAreWatched     bool
-	recipeRetries           sync.Map
-	excludedResourcesMgr    *velero.ExcludedResourcesManager
-	excludedResourcesMutex  sync.RWMutex
-	cachedExcludedResources []string
+	APIReader                client.Reader
+	Log                      logr.Logger
+	ObjStoreGetter           ObjectStoreGetter
+	Scheme                   *runtime.Scheme
+	eventRecorder            *util.EventReporter
+	kubeObjects              kubeobjects.RequestsManager
+	RateLimiter              *workqueue.TypedRateLimiter[reconcile.Request]
+	veleroCRsAreWatched      bool
+	recipeRetries            sync.Map
+	lastSeenProtectedVMsList sync.Map
+	excludedResourcesMgr     *velero.ExcludedResourcesManager
+	excludedResourcesMutex   sync.RWMutex
+	cachedExcludedResources  []string
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -2636,9 +2637,13 @@ func (v *VRGInstance) IsDRActionInProgress() bool {
 	drAction := v.instance.Spec.Action
 	desiredState := status.State
 
-	initialDeploy := len(drAction) == 0 && desiredState == ramendrv1alpha1.UnknownState
+	initialDeploy := len(drAction) == 0 && (desiredState == ramendrv1alpha1.UnknownState || desiredState == "")
 
 	if initialDeploy { // Avoid considering initial deployment as DR action in progress
+		return false
+	}
+
+	if util.ResourceIsDeleted(v.instance) { // Ignore any status change due to VRG deletion
 		return false
 	}
 
@@ -2648,9 +2653,9 @@ func (v *VRGInstance) IsDRActionInProgress() bool {
 	isRepStatePrimary := spec.ReplicationState == ramendrv1alpha1.Primary
 	switchedToPrimary := status.State == ramendrv1alpha1.PrimaryState
 
-	if (isRepStateSecondary && !switchedToSecondary) ||
-		(isRepStatePrimary && !switchedToPrimary) ||
-		v.instance.Generation != status.ObservedGeneration {
+	if ((isRepStateSecondary && !switchedToSecondary) ||
+		(isRepStatePrimary && !switchedToPrimary)) &&
+		len(v.instance.Spec.Action) > 0 {
 		return true
 	}
 
