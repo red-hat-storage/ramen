@@ -19,7 +19,7 @@ echo "Installing ramendev..."
 $venv/bin/pip install -e ./ramendev
 
 echo "Installing development tools"
-$venv/bin/pip install -r requirements.txt
+$venv/bin/pip install -r requirements-dev.txt
 
 echo "Enabling full test coverage"
 cp coverage.pth $venv/lib/python*/site-packages

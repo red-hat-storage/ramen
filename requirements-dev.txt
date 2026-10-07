@@ -2,5 +2,5 @@ black
 coverage
 flake8
 pylint
-pytest
+pytest>=9.0.3
 setuptools
