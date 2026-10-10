@@ -23,6 +23,31 @@ import (
 	"github.com/ramendr/ramen/internal/controller/volsync"
 )
 
+// peerClassGroupsVolSync reports whether PVCs using this StorageClass are replicated
+// in a VolSync consistency group. It returns false when Async has no PeerClasses, no
+// PeerClass matches the StorageClass, or the matching PeerClass has Grouping disabled,
+// so those PVCs use their own ReplicationDestination. When several PeerClasses share
+// the StorageClass name, the last one is used, matching findPeerClassMatchingSC.
+// A missing StorageClass name is an error.
+func (v *VRGInstance) peerClassGroupsVolSync(scName *string) (bool, error) {
+	if scName == nil || *scName == "" {
+		return false, fmt.Errorf("missing storage class name for VolSync peerClass lookup")
+	}
+
+	grouping := false
+
+	if v.instance.Spec.Async != nil {
+		for idx := range v.instance.Spec.Async.PeerClasses {
+			peerClass := &v.instance.Spec.Async.PeerClasses[idx]
+			if peerClass.StorageClassName == *scName {
+				grouping = peerClass.Grouping
+			}
+		}
+	}
+
+	return grouping, nil
+}
+
 //nolint:gocognit,funlen,cyclop
 func (v *VRGInstance) restorePVsAndPVCsForVolSync() (int, error) {
 	v.log.Info("VolSync: Restoring VolSync PVs")
@@ -43,22 +68,31 @@ func (v *VRGInstance) restorePVsAndPVCsForVolSync() (int, error) {
 		// as this would result in incorrect information.
 		rdSpec.ProtectedPVC.Conditions = nil
 
-		cgLabelVal, ok := rdSpec.ProtectedPVC.Labels[util.ConsistencyGroupLabel]
-		if ok && util.IsCGEnabledForVolSync(v.ctx, v.reconciler.APIReader) {
-			v.log.Info("The CG label from the primary cluster found in RDSpec", "Label", cgLabelVal)
-			// Get the CG label value for this cluster
-			cgLabelVal, err = v.getCGLabelValue(rdSpec.ProtectedPVC.StorageClassName,
-				rdSpec.ProtectedPVC.Name, rdSpec.ProtectedPVC.Namespace)
-			if err == nil {
-				cephfsCGHandler := cephfscg.NewVSCGHandler(
-					v.ctx, v.reconciler.Client, v.instance,
-					&metav1.LabelSelector{MatchLabels: map[string]string{util.ConsistencyGroupLabel: cgLabelVal}},
-					v.volSyncHandler, cgLabelVal, v.log,
-				)
-				err = cephfsCGHandler.EnsurePVCfromRGD(rdSpec, failoverAction)
+		grouping := false
+
+		if util.IsCGEnabledForVolSync(v.ctx, v.reconciler.APIReader) {
+			if grouping, err = v.peerClassGroupsVolSync(rdSpec.ProtectedPVC.StorageClassName); err == nil && grouping {
+				// Get the CG label value for this cluster.
+				var cgLabelVal string
+
+				cgLabelVal, err = v.getCGLabelValue(rdSpec.ProtectedPVC.StorageClassName,
+					rdSpec.ProtectedPVC.Name, rdSpec.ProtectedPVC.Namespace)
+				if err == nil {
+					v.log.Info("Restoring PVC with the local consistency-group label",
+						"PVC", rdSpec.ProtectedPVC.Name, "Label", cgLabelVal)
+
+					cephfsCGHandler := cephfscg.NewVSCGHandler(
+						v.ctx, v.reconciler.Client, v.instance,
+						&metav1.LabelSelector{MatchLabels: map[string]string{util.ConsistencyGroupLabel: cgLabelVal}},
+						v.volSyncHandler, cgLabelVal, v.log,
+					)
+					err = cephfsCGHandler.EnsurePVCfromRGD(rdSpec, failoverAction)
+				}
 			}
-		} else {
-			// Create a PVC from snapshot or for direct copy
+		}
+
+		// Create a PVC from snapshot or for direct copy.
+		if err == nil && !grouping {
 			err = v.volSyncHandler.EnsurePVCfromRD(rdSpec, failoverAction)
 		}
 
@@ -298,7 +332,7 @@ func (v *VRGInstance) buildProtectedPVCForPVC(
 		ProtectedByVolSync: true,
 		StorageClassName:   pvc.Spec.StorageClassName,
 		Annotations:        PruneAnnotations(pvc.GetAnnotations()),
-		Labels:             pvc.Labels,
+		Labels:             PruneLabels(pvc.Labels),
 		AccessModes:        pvc.Spec.AccessModes,
 		Resources:          pvc.Spec.Resources,
 		VolumeMode:         pvc.Spec.VolumeMode,
@@ -348,19 +382,22 @@ func (v *VRGInstance) getRSSpecForPVC(pvc corev1.PersistentVolumeClaim,
 func (v *VRGInstance) reconcileVolSyncAsSecondary() bool {
 	v.log.Info("Reconcile VolSync as Secondary", "RDSpec", v.instance.Spec.VolSync.RDSpec)
 
-	// If we are secondary, and RDSpec is not set, then we don't want to have any PVC
-	// flagged as a VolSync PVC.
-	if v.instance.Spec.VolSync.RDSpec == nil {
-		// This might be a case where we lose the RDSpec temporarily,
-		// so we don't know if workload status is truly inactive.
-		idx := 0
+	// This might be a case where we lose the RDSpec temporarily,
+	// so we don't know if workload status is truly inactive.
+	idx := 0
 
-		for _, protectedPVC := range v.instance.Status.ProtectedPVCs {
-			if !protectedPVC.ProtectedByVolSync {
-				v.instance.Status.ProtectedPVCs[idx] = protectedPVC
-				idx++
-			}
+	for _, protectedPVC := range v.instance.Status.ProtectedPVCs {
+		if !protectedPVC.ProtectedByVolSync {
+			v.instance.Status.ProtectedPVCs[idx] = protectedPVC
+			idx++
 		}
+	}
+
+	v.instance.Status.ProtectedPVCs = v.instance.Status.ProtectedPVCs[:idx]
+	v.log.Info("Protected PVCs left", "ProtectedPVCs", v.instance.Status.ProtectedPVCs)
+
+	if requeue := v.updateWorkloadActivityAsSecondary(); requeue {
+		v.log.Info("Workload is still active, requeueing for VolSync reconciliation as Secondary")
 
 		v.instance.Status.ProtectedPVCs = v.instance.Status.ProtectedPVCs[:idx]
 		names := make([]string, 0, len(v.instance.Status.ProtectedPVCs))
@@ -514,10 +551,20 @@ func (v *VRGInstance) reconcileCGMembership() (map[string]struct{}, bool, error)
 	for index := range v.instance.Spec.VolSync.RDSpec {
 		rdSpec := v.instance.Spec.VolSync.RDSpec[index]
 
-		cgLabelVal, ok := rdSpec.ProtectedPVC.Labels[util.ConsistencyGroupLabel]
-		if ok && util.IsCGEnabledForVolSync(v.ctx, v.reconciler.APIReader) {
-			v.log.Info("RDSpec contains the CG label from the primary cluster", "Label", cgLabelVal)
-			// Get the CG label value for this cluster
+		if util.IsCGEnabledForVolSync(v.ctx, v.reconciler.APIReader) {
+			grouping, err := v.peerClassGroupsVolSync(rdSpec.ProtectedPVC.StorageClassName)
+			if err != nil {
+				v.log.Error(err, "Failed to determine VolSync consistency-group membership",
+					"PVC", rdSpec.ProtectedPVC.Name, "namespace", rdSpec.ProtectedPVC.Namespace)
+
+				return rdSpecsUsingCG, true, err
+			}
+
+			if !grouping {
+				continue
+			}
+
+			// Get the CG label value for this cluster.
 			cgLabelVal, err := v.getCGLabelValue(rdSpec.ProtectedPVC.StorageClassName,
 				rdSpec.ProtectedPVC.Name, rdSpec.ProtectedPVC.Namespace)
 			if err != nil {
@@ -525,6 +572,9 @@ func (v *VRGInstance) reconcileCGMembership() (map[string]struct{}, bool, error)
 
 				return rdSpecsUsingCG, true, err
 			}
+
+			v.log.Info("Adding RDSpec to the local consistency group",
+				"PVC", rdSpec.ProtectedPVC.Name, "Label", cgLabelVal)
 
 			key := fmt.Sprintf("%s-%s", rdSpec.ProtectedPVC.Namespace, rdSpec.ProtectedPVC.Name)
 			rdSpecsUsingCG[key] = struct{}{}
