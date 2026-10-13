@@ -57,7 +57,7 @@ jobs:
           kubectl version --client --output=yaml
 
       - name: Install tools
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
       - name: Enable coverage for child processes
         run: cp coverage.pth $(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
@@ -116,7 +116,7 @@ jobs:
         run: brew install kubectl
 
       - name: Install python packages
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
       - name: Enable coverage for child processes
         run: cp coverage.pth $(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
@@ -172,7 +172,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install python packages
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
       - name: Install drenv
         run: pip install -e test
