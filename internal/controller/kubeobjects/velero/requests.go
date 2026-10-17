@@ -17,10 +17,8 @@ import (
 
 	"github.com/go-logr/logr"
 	velero "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
-	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	controllerruntime "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/ramendr/ramen/internal/controller/kubeobjects"
@@ -32,6 +30,10 @@ const (
 	protectsPath = path + "backups/"
 	recoversPath = path + "restores/"
 )
+
+// ErrRestoreCompletedWithZeroResources is returned when a restore completes successfully
+// but restores 0 items, which may indicate a Velero planning issue
+var ErrRestoreCompletedWithZeroResources = errors.New("restore completed with 0 resources restored")
 
 type (
 	BackupRequest  struct{ backup *velero.Backup }
@@ -192,12 +194,7 @@ func (RequestsManager) RecoverRequestCreate(
 	ctx context.Context,
 	k8sclient client.Client,
 	log logr.Logger,
-	s3Url string,
-	s3BucketName string,
-	s3RegionName string,
-	s3KeyPrefix string,
-	secretKeyRef *corev1.SecretKeySelector,
-	caCertificates []byte,
+	loc kubeobjects.StorageLocation,
 	recoverSpec kubeobjects.RecoverSpec,
 	requestNamespaceName string,
 	captureName string,
@@ -207,12 +204,11 @@ func (RequestsManager) RecoverRequestCreate(
 	annotations map[string]string,
 ) (kubeobjects.RecoverRequest, error) {
 	log.Info("Kube objects recover",
-		"s3 url", s3Url,
-		"s3 bucket", s3BucketName,
-		"s3 region", s3RegionName,
-		"s3 key prefix", s3KeyPrefix,
-		"secret key ref", secretKeyRef,
-		"CA certificates", caCertificates,
+		"s3 url", loc.S3URL,
+		"s3 bucket", loc.Bucket,
+		"s3 region", loc.Region,
+		"s3 key prefix", loc.KeyPrefix,
+		"secret key ref", loc.SecretKeyRef,
 		"request namespace", requestNamespaceName,
 		"capture name", captureName,
 		"recover name", recoverName,
@@ -222,12 +218,7 @@ func (RequestsManager) RecoverRequestCreate(
 
 	restore, err := restoreRealCreate(
 		objectWriter{ctx: ctx, Client: k8sclient, log: log},
-		s3Url,
-		s3BucketName,
-		s3RegionName,
-		s3KeyPrefix,
-		secretKeyRef,
-		caCertificates,
+		loc,
 		recoverSpec,
 		requestNamespaceName,
 		captureName,
@@ -242,12 +233,7 @@ func (RequestsManager) RecoverRequestCreate(
 
 func restoreRealCreate(
 	w objectWriter,
-	s3Url string,
-	s3BucketName string,
-	s3RegionName string,
-	s3KeyPrefix string,
-	secretKeyRef *corev1.SecretKeySelector,
-	caCertificates []byte,
+	loc kubeobjects.StorageLocation,
 	recoverSpec kubeobjects.RecoverSpec,
 	requestNamespaceName string,
 	backupName string,
@@ -258,9 +244,8 @@ func restoreRealCreate(
 ) (*velero.Restore, error) {
 	backupRequest, ok := captureRequest.(BackupRequest)
 	if !ok {
-		_, _, err := backupRequestCreate(
-			w, s3Url, s3BucketName, s3RegionName, s3KeyPrefix, secretKeyRef,
-			caCertificates,
+		_, err := backupRequestCreate(
+			w, loc,
 			getBackupSpecFromObjectsSpec(recoverSpec.Spec),
 			requestNamespaceName, backupName,
 			labels,
@@ -339,6 +324,11 @@ func restoreStatusProcess(
 
 	switch restore.Status.Phase {
 	case velero.RestorePhaseCompleted:
+		// Verify that resources were actually restored
+		if restore.Status.Progress == nil || restore.Status.Progress.ItemsRestored == 0 {
+			return ErrRestoreCompletedWithZeroResources
+		}
+
 		return nil
 	case velero.RestorePhaseNew,
 		velero.RestorePhaseInProgress,
@@ -360,12 +350,7 @@ func (RequestsManager) ProtectRequestCreate(
 	ctx context.Context,
 	k8sclient client.Client,
 	log logr.Logger,
-	s3Url string,
-	s3BucketName string,
-	s3RegionName string,
-	s3KeyPrefix string,
-	secretKeyRef *corev1.SecretKeySelector,
-	caCertificates []byte,
+	loc kubeobjects.StorageLocation,
 	objectsSpec kubeobjects.Spec,
 	requestNamespaceName string,
 	captureName string,
@@ -373,27 +358,21 @@ func (RequestsManager) ProtectRequestCreate(
 	annotations map[string]string,
 ) (kubeobjects.ProtectRequest, error) {
 	log.Info("Kube objects protect",
-		"s3 url", s3Url,
-		"s3 bucket", s3BucketName,
-		"s3 region", s3RegionName,
-		"s3 key prefix", s3KeyPrefix,
-		"secret key ref", secretKeyRef,
-		"CA certificates", caCertificates,
+		"s3 url", loc.S3URL,
+		"s3 bucket", loc.Bucket,
+		"s3 region", loc.Region,
+		"s3 key prefix", loc.KeyPrefix,
+		"secret key ref", loc.SecretKeyRef,
 		"source namespaces", objectsSpec.IncludedNamespaces,
 		"request namespace", requestNamespaceName,
 		"capture name", captureName,
 		"label set", labels,
 		"annotations", annotations,
 	)
-	_, backup, err := backupRealCreate(
+	backup, err := backupRequestCreate(
 		objectWriter{ctx: ctx, Client: k8sclient, log: log},
-		s3Url,
-		s3BucketName,
-		s3RegionName,
-		s3KeyPrefix,
-		secretKeyRef,
-		caCertificates,
-		objectsSpec,
+		loc,
+		getBackupSpecFromObjectsSpec(objectsSpec),
 		requestNamespaceName,
 		captureName,
 		labels,
@@ -401,30 +380,6 @@ func (RequestsManager) ProtectRequestCreate(
 	)
 
 	return BackupRequest{backup}, err
-}
-
-func backupRealCreate(
-	w objectWriter,
-	s3Url string,
-	s3BucketName string,
-	s3RegionName string,
-	s3KeyPrefix string,
-	secretKeyRef *corev1.SecretKeySelector,
-	caCertificates []byte,
-	objectsSpec kubeobjects.Spec,
-	requestNamespaceName string,
-	captureName string,
-	labels map[string]string,
-	annotations map[string]string,
-) (*velero.BackupStorageLocation, *velero.Backup, error) {
-	return backupRequestCreate(
-		w, s3Url, s3BucketName, s3RegionName, s3KeyPrefix, secretKeyRef,
-		caCertificates,
-		getBackupSpecFromObjectsSpec(objectsSpec),
-		requestNamespaceName, captureName,
-		labels,
-		annotations,
-	)
 }
 
 func getBackupSpecFromObjectsSpec(objectsSpec kubeobjects.Spec) velero.BackupSpec {
@@ -528,18 +483,13 @@ type objectWriter struct {
 
 func backupRequestCreate(
 	w objectWriter,
-	s3Url string,
-	s3BucketName string,
-	s3RegionName string,
-	s3KeyPrefix string,
-	secretKeyRef *corev1.SecretKeySelector,
-	caCertificates []byte,
+	loc kubeobjects.StorageLocation,
 	backupSpec velero.BackupSpec,
 	requestsNamespaceName string,
 	requestName string,
 	labels map[string]string,
 	annotations map[string]string,
-) (*velero.BackupStorageLocation, *velero.Backup, error) {
+) (*velero.Backup, error) {
 	backupLocation := &velero.BackupStorageLocation{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: requestsNamespaceName,
@@ -547,22 +497,15 @@ func backupRequestCreate(
 		},
 	}
 
-	err := w.bslCreateOrUpdate(s3Url,
-		s3BucketName,
-		s3RegionName,
-		s3KeyPrefix,
-		secretKeyRef,
-		caCertificates,
-		labels,
-		backupLocation)
+	err := w.bslCreateOrUpdate(loc, labels, backupLocation)
 	if err != nil {
 		w.log.Error(err, "")
 
-		return backupLocation, nil, err
+		return nil, err
 	}
 	// Check BSL availability before creating backup
 	if err := w.checkBSLAvailability(backupLocation); err != nil {
-		return backupLocation, nil, fmt.Errorf("BSL %s/%s not available for backup creation: %w",
+		return nil, fmt.Errorf("BSL %s/%s not available for backup creation: %w",
 			backupLocation.Namespace, backupLocation.Name, err)
 	}
 
@@ -570,7 +513,7 @@ func backupRequestCreate(
 	backupSpec.SnapshotVolumes = new(bool)
 	backupRequest := backupRequest(requestsNamespaceName, requestName, backupSpec, labels, annotations)
 
-	return backupLocation, backupRequest, w.Create(w.ctx, backupRequest)
+	return backupRequest, w.Create(w.ctx, backupRequest)
 }
 
 // backupRequestDelete deletes only the Backup CR, leaving the BSL alive for reuse
@@ -603,53 +546,6 @@ func (w objectWriter) objectCreate(o client.Object) error {
 	return nil
 }
 
-func (w objectWriter) bslCreateOrUpdate(s3Url string,
-	s3BucketName string,
-	s3RegionName string,
-	s3KeyPrefix string,
-	secretKeyRef *corev1.SecretKeySelector,
-	caCertificates []byte,
-	labels map[string]string,
-	backupLocation *velero.BackupStorageLocation,
-) error {
-	op, err := controllerruntime.CreateOrUpdate(w.ctx, w.Client, backupLocation, func() error {
-		backupLocation.TypeMeta = veleroTypeMeta("BackupStorageLocation")
-		backupLocation.ObjectMeta.Labels = labels
-		backupLocation.Spec = velero.BackupStorageLocationSpec{
-			Provider: "aws",
-			StorageType: velero.StorageType{
-				ObjectStorage: &velero.ObjectStorageLocation{
-					Bucket: s3BucketName,
-					Prefix: s3KeyPrefix + path,
-					CACert: caCertificates,
-				},
-			},
-			Config: map[string]string{
-				"region":            s3RegionName,
-				"s3ForcePathStyle":  "true",
-				"s3Url":             s3Url,
-				"checksumAlgorithm": "",
-			},
-			Credential: secretKeyRef,
-			// Disable Velero's backup-sync for this BSL.  Ramen explicitly manages the
-			// Backup CR lifecycle (delete after each cycle); if sync were enabled Velero
-			// would re-create deleted Backup CRs from S3, confusing the capture-resume logic
-			// and inflating the recipeRetries counter.
-			BackupSyncPeriod: &metav1.Duration{},
-		}
-		util.AddLabel(backupLocation, util.CreatedByRamenLabel, "true")
-
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create or update BackupStorageLocation: %w", err)
-	}
-
-	w.log.Info("backupstoragelocation reconciled", "operation", op, "name", backupLocation.GetName())
-
-	return nil
-}
-
 func (w objectWriter) objectDelete(o client.Object) error {
 	if err := w.Delete(w.ctx, o); err != nil {
 		if !k8serrors.IsNotFound(err) {
@@ -660,65 +556,6 @@ func (w objectWriter) objectDelete(o client.Object) error {
 	} else {
 		w.log.Info("Object deleted successfully", "type", o.GetObjectKind(), "name", o.GetName())
 	}
-
-	return nil
-}
-
-func isBSLAvailable(bsl velero.BackupStorageLocation) bool {
-	return bsl.Status.Phase == velero.BackupStorageLocationPhaseAvailable
-}
-
-// checkBSLStatus checks if BSL is Available
-func (w objectWriter) checkBSLStatus(
-	reader client.Reader,
-	key client.ObjectKey,
-	currentBSL *velero.BackupStorageLocation,
-	bslName string,
-) (bool, error) {
-	if err := reader.Get(w.ctx, key, currentBSL); err != nil {
-		if k8serrors.IsNotFound(err) {
-			w.log.V(1).Info("BSL not found", "bsl", bslName, "error", err)
-		} else {
-			w.log.V(1).Info("Failed to get BSL", "bsl", bslName, "error", err)
-		}
-
-		return false, err
-	}
-
-	w.log.V(1).Info("BSL status check", "bsl", bslName, "phase", currentBSL.Status.Phase)
-
-	return isBSLAvailable(*currentBSL), nil
-}
-
-// checkBSLAvailability checks if BSL is Available and returns error if not ready
-func (w objectWriter) checkBSLAvailability(bsl *velero.BackupStorageLocation) error {
-	reader, ok := w.Client.(client.Reader)
-	if !ok {
-		return fmt.Errorf("writer does not implement client.Reader interface")
-	}
-
-	key := client.ObjectKey{
-		Namespace: bsl.Namespace,
-		Name:      bsl.Name,
-	}
-
-	currentBSL := &velero.BackupStorageLocation{}
-
-	available, err := w.checkBSLStatus(reader, key, currentBSL, bsl.Name)
-	if err != nil {
-		w.log.V(1).Info("Failed to check BSL status, will retry in next reconcile", "bsl", bsl.Name, "error", err)
-
-		return fmt.Errorf("failed to check BSL status: %w", err)
-	}
-
-	if !available {
-		w.log.Info("BSL not yet available, will retry in next reconcile", "bsl", bsl.Name,
-			"phase", currentBSL.Status.Phase)
-
-		return fmt.Errorf("BSL %s/%s not yet available", bsl.Namespace, bsl.Name)
-	}
-
-	w.log.Info("BSL is available, proceeding with backup creation", "bsl", bsl.Name)
 
 	return nil
 }

@@ -423,6 +423,7 @@ func filterPVC(reader client.Reader, pvc *corev1.PersistentVolumeClaim, log logr
 // +kubebuilder:rbac:groups=replication.storage.openshift.io,resources=volumegroupreplicationclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=volumeattachments,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=volumeattributesclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs/status,verbs=get
@@ -483,6 +484,7 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 		namespacedName:    req.NamespacedName.String(),
 		objectStorers:     make(map[string]cachedObjectStorer),
 		storageClassCache: make(map[string]*storagev1.StorageClass),
+		vacCache:          make(map[string]*storagev1.VolumeAttributesClass),
 	}
 
 	// Fetch the VolumeReplicationGroup instance
@@ -576,6 +578,7 @@ type VRGInstance struct {
 	replClassList        *volrep.VolumeReplicationClassList
 	grpReplClassList     *volrep.VolumeGroupReplicationClassList
 	storageClassCache    map[string]*storagev1.StorageClass
+	vacCache             map[string]*storagev1.VolumeAttributesClass
 	vrgObjectProtected   *metav1.Condition
 	kubeObjectsProtected *metav1.Condition
 	vrcUpdated           bool
@@ -1682,7 +1685,7 @@ func (v *VRGInstance) reconcileAsPrimary() {
 		vrg.Status.PrepareForFinalSyncComplete = finalSyncPrepared.volSync
 	}
 
-	if !v.result.Requeue && v.isVMRecipeProtection() {
+	if !v.result.Requeue && util.IsVMRecipe(v.instance.Spec.KubeObjectProtection) {
 		if err := v.validateVMsForStandaloneProtection(); err != nil {
 			v.result.Requeue = true
 		}
@@ -2147,7 +2150,7 @@ func (v *VRGInstance) updateVRGAutoCleanupCondition() {
 		setVRGAutoCleanupCondition(&v.instance.Status.Conditions, v.instance.Generation,
 			metav1.ConditionFalse, VRGConditionReasonUnused,
 			"Automated Cleanup not applicable: GitOps manages the application's resource lifecycle.")
-	case !v.isVMRecipeProtection():
+	case !util.IsVMRecipe(v.instance.Spec.KubeObjectProtection):
 		// all other discovered apps protection except vm-recipe
 		setVRGAutoCleanupCondition(&v.instance.Status.Conditions, v.instance.Generation,
 			metav1.ConditionFalse, VRGConditionReasonUnused,
@@ -2168,10 +2171,10 @@ func (v *VRGInstance) updateVRGAutoCleanupCondition() {
 	}
 }
 
-// updateVRGConditions updates four summary conditions VRGConditionTypeDataReady,
-// VRGConditionTypeClusterDataProtected, VRGConditionTypeDataProtected and
-// VRGConditionTypeDestinationInfoAvailable, at the VRG level based on the
-// corresponding PVC level conditions in the VRG:
+// updateVRGConditions updates five summary conditions VRGConditionTypeDataReady,
+// VRGConditionTypeClusterDataProtected, VRGConditionTypeDataProtected,
+// VRGConditionTypeDestinationInfoAvailable and VRGConditionTypeReplicationHealthy,
+// at the VRG level based on the corresponding PVC level conditions in the VRG:
 //
 // The VRGConditionTypeClusterDataReady summary condition is not a PVC level
 // condition and is updated elsewhere.
@@ -2204,6 +2207,10 @@ func (v *VRGInstance) updateVRGConditions() {
 
 	if destInfoCond := v.aggregateVolRepDestinationInfoAvailableCondition(); destInfoCond != nil {
 		v.logAndSetConditions(VRGConditionTypeDestinationInfoAvailable, destInfoCond)
+	}
+
+	if replicationHealthyCond := v.aggregateVolRepReplicationHealthyCondition(); replicationHealthyCond != nil {
+		v.logAndSetConditions(VRGConditionTypeReplicationHealthy, replicationHealthyCond)
 	}
 
 	v.updateVRGLastGroupSyncTime()
@@ -2810,7 +2817,7 @@ func (v *VRGInstance) PriortizePrimaryClusterDataConflictCondition(
 func (v *VRGInstance) aggregateVMNoClusterDataConflictCondition() *metav1.Condition {
 	var msg string
 
-	if v.isVMRecipeProtection() {
+	if util.IsVMRecipe(v.instance.Spec.KubeObjectProtection) {
 		if err := v.validateVMsForStandaloneProtection(); err != nil {
 			v.log.Error(err, "this discrepancy indicates that the current label selector does not "+
 				"accurately reflect the intended set of protected VMs")
@@ -2838,16 +2845,6 @@ func (v *VRGInstance) clusterDataConflict(msg string, status metav1.ConditionSta
 	}
 
 	return nil
-}
-
-func (v *VRGInstance) isVMRecipeProtection() bool {
-	if v.instance.Spec.KubeObjectProtection != nil && v.instance.Spec.KubeObjectProtection.RecipeRef != nil {
-		if v.instance.Spec.KubeObjectProtection.RecipeRef.Name == recipecore.VMRecipeName {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (v *VRGInstance) aggregateVolRepClusterDataConflictCondition() *metav1.Condition {
@@ -2959,9 +2956,27 @@ func PruneAnnotations(annotations map[string]string) map[string]string {
 	return result
 }
 
+// PruneLabels copies labels and drops labels that are meaningful only on the
+// cluster where the PVC lives. The consistency-group value is
+// <namespace>-<this cluster's storage id> for CephFS, so the peer must not
+// receive it. Each cluster writes its own consistency-group label onto the local PVC.
+func PruneLabels(pvcLabels map[string]string) map[string]string {
+	result := make(map[string]string, len(pvcLabels))
+
+	for key, value := range pvcLabels {
+		if key == util.ConsistencyGroupLabel {
+			continue
+		}
+
+		result[key] = value
+	}
+
+	return result
+}
+
 func (v *VRGInstance) aggregateVRGAutoCleanupCondition() *metav1.Condition {
 	cur := util.FindCondition(v.instance.Status.Conditions, VRGConditionTypeAutoCleanup)
-	if !v.isVMRecipeProtection() ||
+	if !util.IsVMRecipe(v.instance.Spec.KubeObjectProtection) ||
 		len(v.volSyncPVCs) > 0 {
 		return cur
 	}
@@ -3115,4 +3130,42 @@ func (v *VRGInstance) classifyVMStaticIP(
 	)
 
 	return info, nil
+}
+
+// isSingleGroupRestore determines if the VRG is configured to protect VirtualMachine resources.
+// Returns true for:
+// 1. vm-recipe: Explicitly protects VMs
+// 2. Discovered application protection at namespace level with label selector
+// Note: Custom recipes are deliberately ignored. Determines namespace level protection based on VRG spec.
+func (v *VRGInstance) isSingleGroupRestore() bool {
+	// Check if using vm-recipe - always protects VMs
+	if util.IsVMRecipe(v.instance.Spec.KubeObjectProtection) {
+		v.log.Info("VRG is using vm-recipe - VMs are being protected")
+
+		return true
+	}
+
+	// Check for namespace-level protection (not custom recipe)
+	if v.isNamespaceScopedVMProtection() {
+		v.log.Info("VRG is using namespace-level protection with label selector - likely protecting VMs")
+
+		return true
+	}
+
+	return false
+}
+
+// isNamespaceLevelVMProtection returns true when VM protection is configured
+// through protected namespaces and a kube object selector, and is not using
+// a custom recipe.
+func (v *VRGInstance) isNamespaceScopedVMProtection() bool {
+	namespaces := v.instance.Spec.ProtectedNamespaces
+	if namespaces == nil || len(*namespaces) == 0 {
+		return false
+	}
+
+	kop := v.instance.Spec.KubeObjectProtection
+
+	return kop != nil && kop.KubeObjectSelector != nil &&
+		v.instance.Spec.KubeObjectProtection.RecipeRef == nil
 }
