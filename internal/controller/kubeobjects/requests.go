@@ -45,6 +45,17 @@ func RequestsMapKeyedByName(requestsStruct Requests) map[string]Request {
 
 type RequestProcessingError struct{ string }
 
+// StorageLocation identifies the S3 object store that protect and recover
+// requests read from and write to.
+type StorageLocation struct {
+	S3URL          string
+	Bucket         string
+	Region         string
+	KeyPrefix      string
+	SecretKeyRef   *corev1.SecretKeySelector
+	CACertificates []byte
+}
+
 type CaptureSpec struct {
 	//+optional
 	Name string `json:"name,omitempty"`
@@ -187,12 +198,7 @@ type RequestsManager interface {
 	RecoverRequestNew() RecoverRequest
 	ProtectRequestCreate(
 		c context.Context, w client.Client, l logr.Logger,
-		s3Url string,
-		s3BucketName string,
-		s3RegionName string,
-		s3KeyPrefix string,
-		secretKeyRef *corev1.SecretKeySelector,
-		caCertificates []byte,
+		loc StorageLocation,
 		objectsSpec Spec,
 		requestNamespaceName string,
 		protectRequestName string,
@@ -201,12 +207,7 @@ type RequestsManager interface {
 	) (ProtectRequest, error)
 	RecoverRequestCreate(
 		c context.Context, w client.Client, l logr.Logger,
-		s3Url string,
-		s3BucketName string,
-		s3RegionName string,
-		s3KeyPrefix string,
-		secretKeyRef *corev1.SecretKeySelector,
-		caCertificates []byte,
+		loc StorageLocation,
 		recoverSpec RecoverSpec,
 		requestNamespaceName string,
 		protectRequestName string,

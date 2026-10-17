@@ -27,6 +27,7 @@ import (
 	"github.com/ramendr/ramen/internal/controller/hooks"
 	"github.com/ramendr/ramen/internal/controller/hooks/common"
 	"github.com/ramendr/ramen/internal/controller/kubeobjects"
+	veleroreq "github.com/ramendr/ramen/internal/controller/kubeobjects/velero"
 	"github.com/ramendr/ramen/internal/controller/util"
 )
 
@@ -190,7 +191,7 @@ func (v *VRGInstance) kubeObjectsCaptureStartOrResumeOrDelay(
 // a capture completes successfully.
 func (v *VRGInstance) isProtectedVMsListUpdated() bool {
 	vrg := v.instance
-	if !v.isVMRecipeProtection() || vrg.Spec.KubeObjectProtection.RecipeParameters == nil {
+	if !util.IsVMRecipe(vrg.Spec.KubeObjectProtection) || vrg.Spec.KubeObjectProtection.RecipeParameters == nil {
 		return false
 	}
 
@@ -215,7 +216,7 @@ func (v *VRGInstance) isProtectedVMsListUpdated() bool {
 // requests completed successfully.
 func (v *VRGInstance) acknowledgeProtectedVMsList() {
 	vrg := v.instance
-	if !v.isVMRecipeProtection() || vrg.Spec.KubeObjectProtection.RecipeParameters == nil {
+	if !util.IsVMRecipe(vrg.Spec.KubeObjectProtection) || vrg.Spec.KubeObjectProtection.RecipeParameters == nil {
 		return
 	}
 
@@ -499,6 +500,19 @@ func (v *VRGInstance) executeCaptureSteps(result *ctrl.Result, pathName, capture
 	return allEssentialStepsFailed, nil
 }
 
+// kubeObjectsStorageLocation returns the location in this S3 store where kube
+// objects protect and recover requests are kept under keyPrefix.
+func (s s3StoreAccessor) kubeObjectsStorageLocation(keyPrefix string) kubeobjects.StorageLocation {
+	return kubeobjects.StorageLocation{
+		S3URL:          s.S3CompatibleEndpoint,
+		Bucket:         s.S3Bucket,
+		Region:         s.S3Region,
+		KeyPrefix:      keyPrefix,
+		SecretKeyRef:   s.VeleroNamespaceSecretKeyRef,
+		CACertificates: s.CACertificates,
+	}
+}
+
 func (v *VRGInstance) kubeObjectsGroupCapture(
 	result *ctrl.Result,
 	captureGroup kubeobjects.CaptureSpec,
@@ -512,51 +526,97 @@ func (v *VRGInstance) kubeObjectsGroupCapture(
 
 		request, ok := requests[requestName]
 		if !ok {
-			// Merge ConfigMap default exclusions with recipe-level exclusions
-			captureSpec := v.mergeExcludedResources(captureGroup.Spec)
-
-			if _, err := v.reconciler.kubeObjects.ProtectRequestCreate(
-				v.ctx, v.reconciler.Client, v.log,
-				s3StoreAccessor.S3CompatibleEndpoint, s3StoreAccessor.S3Bucket, s3StoreAccessor.S3Region,
-				pathName, s3StoreAccessor.VeleroNamespaceSecretKeyRef, s3StoreAccessor.CACertificates,
-				captureSpec, veleroNamespaceName, requestName,
-				labels, annotations,
-			); err != nil {
-				log1.Error(err, "Kube objects group capture request submit error")
-
-				result.Requeue = true
-				reqErr = fmt.Errorf("kube objects group capture error: %v", err)
+			if err := v.createCaptureRequest(result, captureGroup, pathName, veleroNamespaceName,
+				s3StoreAccessor, requestName, labels, annotations, log1); err != nil {
+				reqErr = err
 
 				continue
 			}
-
-			log1.Info("Kube objects group capture request submitted")
 		} else {
-			err := request.Status(v.log)
-			if err == nil {
+			completed, err := v.processCaptureRequestStatus(
+				result, request, s3StoreAccessor, capturePathName, log1)
+			if err != nil {
+				reqErr = err
+
+				continue
+			}
+
+			if completed {
 				requestsCompletedCount++
-
-				continue
 			}
-
-			if errors.Is(err, kubeobjects.RequestProcessingError{}) {
-				log1.Info("Kube objects group capturing", "state", err.Error())
-
-				continue
-			}
-
-			log1.Error(err, "Kube objects group capture error")
-			v.kubeObjectsCaptureAndCaptureRequestDelete(request, s3StoreAccessor, capturePathName, log1)
-			v.kubeObjectsCaptureStatusFalse("KubeObjectsCaptureError", err.Error())
-
-			result.Requeue = true
-			reqErr = fmt.Errorf("kube objects group capture error: %v", err)
-
-			continue
 		}
 	}
 
 	return requestsCompletedCount, reqErr
+}
+
+func (v *VRGInstance) createCaptureRequest(
+	result *ctrl.Result,
+	captureGroup kubeobjects.CaptureSpec,
+	pathName, veleroNamespaceName string,
+	s3StoreAccessor s3StoreAccessor,
+	requestName string,
+	labels, annotations map[string]string,
+	log logr.Logger,
+) error {
+	// Merge ConfigMap default exclusions with recipe-level exclusions
+	captureSpec := v.mergeExcludedResources(captureGroup.Spec)
+
+	if _, err := v.reconciler.kubeObjects.ProtectRequestCreate(
+		v.ctx, v.reconciler.Client, v.log,
+		s3StoreAccessor.kubeObjectsStorageLocation(pathName),
+		captureSpec, veleroNamespaceName, requestName,
+		labels, annotations,
+	); err != nil {
+		log.Error(err, "Kube objects group capture request submit error")
+
+		result.Requeue = true
+
+		return fmt.Errorf("kube objects group capture error: %v", err)
+	}
+
+	log.Info("Kube objects group capture request submitted")
+
+	return nil
+}
+
+func (v *VRGInstance) processCaptureRequestStatus(
+	result *ctrl.Result,
+	request kubeobjects.Request,
+	s3StoreAccessor s3StoreAccessor,
+	capturePathName string,
+	log logr.Logger,
+) (completed bool, err error) {
+	statusErr := request.Status(v.log)
+	if statusErr == nil {
+		return true, nil
+	}
+
+	if errors.Is(statusErr, kubeobjects.RequestProcessingError{}) {
+		log.Info("Kube objects group capturing", "state", statusErr.Error())
+
+		return false, nil
+	}
+
+	log.Error(statusErr, "Kube objects group capture error")
+	v.kubeObjectsCaptureAndCaptureRequestDelete(request, s3StoreAccessor, capturePathName, log)
+	v.kubeObjectsCaptureStatusFalse("KubeObjectsCaptureError", statusErr.Error())
+
+	result.Requeue = true
+
+	return false, fmt.Errorf("kube objects group capture error: %v", statusErr)
+}
+
+func (v *VRGInstance) shouldRetryZeroItemRestore(log logr.Logger) error {
+	if !v.isSingleGroupRestore() {
+		return nil
+	}
+
+	log.Info("Restore completed with 0 items but resources are being protected - will retry")
+
+	return kubeobjects.RequestProcessingErrorCreate(
+		"restore completed with 0 resources when resources were expected to be restored - retrying restore",
+	)
 }
 
 func (v *VRGInstance) kubeObjectsCaptureAndCaptureRequestDelete(
@@ -820,9 +880,7 @@ func (v *VRGInstance) getRecoverOrProtectRequest(
 
 			return v.reconciler.kubeObjects.RecoverRequestCreate(
 				v.ctx, v.reconciler.Client, v.log,
-				s3StoreAccessor.S3CompatibleEndpoint, s3StoreAccessor.S3Bucket, s3StoreAccessor.S3Region, pathName,
-				s3StoreAccessor.VeleroNamespaceSecretKeyRef,
-				s3StoreAccessor.CACertificates,
+				s3StoreAccessor.kubeObjectsStorageLocation(pathName),
 				recoverGroup, v.veleroNamespaceName(),
 				captureName, captureRequest,
 				recoverName,
@@ -1015,24 +1073,68 @@ func (v *VRGInstance) executeRecoverGroup(result *ctrl.Result, s3StoreAccessor s
 			return errors.New("kube objects group recover request submitted")
 		}
 	} else {
-		err = request.Status(v.log)
-		if err == nil {
-			log1.Info("Kube objects group recovered", "start", request.StartTime(), "end", request.EndTime())
-			requests[groupNumber] = request
-
+		if err = v.handleRecoverRequestStatus(result, request, requests, groupNumber, cleanup, log1); err == nil {
 			return nil
 		}
 	}
 
+	return v.handleRecoverError(result, err, ok, request, cleanup, log1)
+}
+
+func (v *VRGInstance) handleRecoverRequestStatus(
+	result *ctrl.Result,
+	request kubeobjects.Request,
+	requests []kubeobjects.Request,
+	groupNumber int,
+	cleanup func(kubeobjects.Request),
+	log logr.Logger,
+) error {
+	err := request.Status(v.log)
+	if err == nil {
+		log.Info("Kube objects group recovered", "start", request.StartTime(), "end", request.EndTime())
+		requests[groupNumber] = request
+
+		return nil
+	}
+
+	// Handle zero-resource restore before general error handling
+	if errors.Is(err, veleroreq.ErrRestoreCompletedWithZeroResources) {
+		if retryErr := v.shouldRetryZeroItemRestore(log); retryErr != nil {
+			log.Info("Restore completed with 0 items and resources are protected - deleting and retrying")
+			// Delete the failed request before retrying so next reconcile creates a fresh restore
+			cleanup(request)
+
+			result.Requeue = true
+
+			return retryErr
+		}
+
+		log.Info("Kube objects group recovered", "start", request.StartTime(), "end", request.EndTime())
+		requests[groupNumber] = request
+
+		return nil
+	}
+
+	return err
+}
+
+func (v *VRGInstance) handleRecoverError(
+	result *ctrl.Result,
+	err error,
+	requestExists bool,
+	request kubeobjects.Request,
+	cleanup func(kubeobjects.Request),
+	log logr.Logger,
+) error {
 	if errors.Is(err, kubeobjects.RequestProcessingError{}) {
-		log1.Info("Kube objects group recovering", "state", err.Error())
+		log.Info("Kube objects group recovering", "state", err.Error())
 
 		return err
 	}
 
-	log1.Error(err, "Kube objects group recover error")
+	log.Error(err, "Kube objects group recover error")
 
-	if ok {
+	if requestExists {
 		cleanup(request)
 	}
 
