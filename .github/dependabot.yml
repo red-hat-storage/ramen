@@ -8,43 +8,81 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "sunday"
+    open-pull-requests-limit: 2
+    # These Kubernetes/operator libraries are upgraded deliberately and in
+    # lockstep; leave them out of automated Dependabot bumps.
+    ignore:
+      - dependency-name: "k8s.io/api"
+      - dependency-name: "k8s.io/apimachinery"
+      - dependency-name: "k8s.io/component-base"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+      - dependency-name: "github.com/operator-framework/api"
 
   - package-ecosystem: "gomod"
     directory: "/api"
     schedule:
       interval: "weekly"
+      day: "sunday"
+    open-pull-requests-limit: 2
+    ignore:
+      - dependency-name: "k8s.io/api"
+      - dependency-name: "k8s.io/apimachinery"
+      - dependency-name: "k8s.io/component-base"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+      - dependency-name: "github.com/operator-framework/api"
 
   - package-ecosystem: "gomod"
     directory: "/e2e"
     schedule:
       interval: "weekly"
+      day: "sunday"
+    open-pull-requests-limit: 2
+    ignore:
+      - dependency-name: "k8s.io/api"
+      - dependency-name: "k8s.io/apimachinery"
+      - dependency-name: "k8s.io/component-base"
+      - dependency-name: "sigs.k8s.io/controller-runtime"
+      - dependency-name: "github.com/operator-framework/api"
 
   - package-ecosystem: "gomod"
     directory: "/test/timestamp"
     schedule:
       interval: "weekly"
+      day: "sunday"
+    open-pull-requests-limit: 2
 
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: 2
 
   - package-ecosystem: "pip"
     directory: "/test"
     schedule:
       interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: 2
 
   - package-ecosystem: "pip"
     directory: "/ramendev"
     schedule:
       interval: "weekly"
+      day: "tuesday"
+    open-pull-requests-limit: 2
 
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 2
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "thursday"
+    open-pull-requests-limit: 2

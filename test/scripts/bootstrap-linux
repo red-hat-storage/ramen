@@ -122,11 +122,12 @@ TOOLS = [
         "verify": ["virtctl", "version", "--client"],
     },
     {
-        "name": "mc",
-        "version": "RELEASE.2025-08-13T08-35-41Z",
-        "url": "https://dl.min.io/client/mc/release/{goos}-{goarch}/archive/mc.{version}",
-        "digest": "01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891",
-        "verify": ["mc", "--version"],
+        "name": "mcli",
+        "version": "RELEASE.2026-09-16T00-00-00Z",
+        "url": "https://github.com/pgsty/mc/releases/download/{version}/mcli_20260916000000.0.0_{goos}_{goarch}.tar.gz",
+        "digest": "4ba2814fd5507fbe6b4d237c359750b9119d28d7217495fa5b48002fcbd397ef",
+        "member": "mcli",
+        "verify": ["mcli", "--version"],
     },
     {
         "name": "kustomize",
@@ -145,9 +146,9 @@ TOOLS = [
     },
     {
         "name": "kubectl-gather",
-        "version": "v0.14.0",
-        "url": "https://github.com/nirs/kubectl-gather/releases/download/{version}/kubectl-gather-{version}-{goos}-{goarch}",
-        "digest": "73f6d50843f2c0b42b3d1685df4743adac7c0d2d690229be7b3ee9506ead5684",
+        "version": "v0.15.0",
+        "url": "https://github.com/nirs/kubectl-gather/releases/download/{version}/kubectl-gather-{goos}-{goarch}",
+        "digest": "dddaeedec653e8a71b20fdd77d7f4baa1902c43254b684d10e5bb962e28937d9",
         "verify": ["kubectl-gather", "--version"],
     },
 ]
