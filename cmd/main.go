@@ -48,6 +48,7 @@ import (
 	rmnutil "github.com/ramendr/ramen/internal/controller/util"
 	// +kubebuilder:scaffold:imports
 	_ "github.com/ramendr/ramen/internal/dummy"
+	ramenmanager "github.com/ramendr/ramen/internal/manager"
 )
 
 var (
@@ -290,7 +291,7 @@ func main() {
 
 	ctrlOptions, ramenConfig := buildOptions(restCfg, ramenConfig)
 
-	mgr, err := ctrl.NewManager(restCfg, *ctrlOptions)
+	mgr, err := ramenmanager.NewManager(restCfg, *ctrlOptions, controllers.ControllerType)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
