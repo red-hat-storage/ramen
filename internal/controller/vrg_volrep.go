@@ -5,6 +5,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -29,6 +30,11 @@ import (
 	recipecore "github.com/ramendr/ramen/internal/controller/core"
 	rmnutil "github.com/ramendr/ramen/internal/controller/util"
 )
+
+// errNoReplicationClassMatch marks a genuine no-match when selecting a VRC/VGRC
+// for a StorageClass (including empty class lists). Other select errors (API
+// failures, ambiguous defaults) are returned as-is.
+var errNoReplicationClassMatch = errors.New("no matching replication class")
 
 const (
 	// defaultVRCAnnotationKey is the default annotation key for VolumeReplicationClass
@@ -608,6 +614,13 @@ func (v *VRGInstance) preparePVCForVRDeletion(pvc *corev1.PersistentVolumeClaim,
 	// such that the PV can bind back to a recreated PVC. func ref.: updateExistingPVForSync
 	if v.instance.Spec.Async != nil || v.instance.Spec.ReplicationState == ramendrv1alpha1.Primary {
 		undoPVRetention(&pv)
+	} else {
+		// The PV stays retained, mark it so it can be found and cleaned up when this VRG is deleted
+		if pv.Labels == nil {
+			pv.Labels = map[string]string{}
+		}
+
+		pv.Labels[pvLeftBehindLabelKey] = string(v.instance.UID)
 	}
 
 	delete(pv.Annotations, pvcVRAnnotationArchivedKey)
@@ -674,6 +687,50 @@ func (v *VRGInstance) retainPVForPVC(pvc corev1.PersistentVolumeClaim, log logr.
 
 	return v.addAnnotationForResource(pv, "PersistentVolume", pvVRAnnotationRetentionKey,
 		pvVRAnnotationRetentionValue, log)
+}
+
+// deleteLeftBehindPVs deletes the PV objects left behind by a Sync (MetroDR) VRG that is being deleted as Secondary.
+// The PVs are found by the left behind label, as their PVCs are already removed when the workload moved to the peer
+// cluster. Only PVs in the Released phase are cleaned up, others are left alone.
+// The reclaim policy is intentionally kept as Retain so that Kubernetes does NOT issue a CSI DeleteVolume call,
+// preventing accidental data loss (e.g. when disabling DR while data is still live on the peer cluster).
+func (v *VRGInstance) deleteLeftBehindPVs() error {
+	if v.instance.Spec.Sync == nil || v.instance.Spec.ReplicationState != ramendrv1alpha1.Secondary {
+		return nil
+	}
+
+	pvList := &corev1.PersistentVolumeList{}
+	if err := v.reconciler.List(v.ctx, pvList,
+		client.MatchingLabels{pvLeftBehindLabelKey: string(v.instance.UID)}); err != nil {
+		return fmt.Errorf("failed to list PersistentVolumes left behind by VRG %s/%s, %w",
+			v.instance.Namespace, v.instance.Name, err)
+	}
+
+	var errs []error
+
+	for idx := range pvList.Items {
+		pv := &pvList.Items[idx]
+
+		if pv.Status.Phase != corev1.VolumeReleased {
+			continue
+		}
+
+		if rmnutil.ResourceIsDeleted(pv) {
+			continue
+		}
+
+		if err := v.reconciler.Delete(v.ctx, pv); err != nil && !k8serrors.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("failed to delete PersistentVolume %s left behind by VRG %s/%s, %w",
+				pv.Name, v.instance.Namespace, v.instance.Name, err))
+
+			continue
+		}
+
+		v.log.Info(fmt.Sprintf("Deleted PV %s left behind by VRG %s/%s",
+			pv.Name, v.instance.Namespace, v.instance.Name))
+	}
+
+	return errors.Join(errs...)
 }
 
 // undoPVRetention updates the PV reclaim policy back to its saved state
@@ -1602,9 +1659,28 @@ func (v *VRGInstance) getPVCForVRNSName(vrNamespacedName types.NamespacedName) (
 // functions to be changed would be processVRAsPrimary(), processVRAsSecondary()
 // to either receive pvc NamespacedName or pvc itself as an additional argument.
 
-//nolint:funlen,cyclop,gocognit,nestif,gocyclo
 func (v *VRGInstance) selectVolumeReplicationClass(
 	pvc *corev1.PersistentVolumeClaim, selectVolumeGroup bool,
+) (client.Object, error) {
+	storageClass, err := v.getStorageClass(pvc)
+	if err != nil {
+		v.log.Info(fmt.Sprintf("Failed to get the storageclass of pvc %s",
+			pvc.GetName()))
+
+		return nil, fmt.Errorf("failed to get the storageclass of pvc %s (%w)",
+			pvc.GetName(), err)
+	}
+
+	return v.selectReplicationClassForStorageClass(storageClass, selectVolumeGroup)
+}
+
+// selectReplicationClassForStorageClass returns the VolumeReplicationClass, or the
+// VolumeGroupReplicationClass if selectVolumeGroup is set, that matches the given
+// StorageClass and the VRG schedule.
+//
+//nolint:funlen,cyclop,gocognit,nestif,gocyclo
+func (v *VRGInstance) selectReplicationClassForStorageClass(
+	storageClass *storagev1.StorageClass, selectVolumeGroup bool,
 ) (client.Object, error) {
 	if err := v.updateReplicationClassList(); err != nil {
 		return nil, err
@@ -1613,16 +1689,8 @@ func (v *VRGInstance) selectVolumeReplicationClass(
 	if len(v.replClassList.Items) == 0 && len(v.grpReplClassList.Items) == 0 {
 		v.log.Info("No VolumeReplicationClass and VolumeGroupReplicationClass available")
 
-		return nil, fmt.Errorf("no VolumeReplicationClass and VolumeGroupReplicationClass available")
-	}
-
-	storageClass, err := v.getStorageClass(pvc)
-	if err != nil {
-		v.log.Info(fmt.Sprintf("Failed to get the storageclass of pvc %s",
-			pvc.GetName()))
-
-		return nil, fmt.Errorf("failed to get the storageclass of pvc %s (%w)",
-			pvc.GetName(), err)
+		return nil, fmt.Errorf("%w: no VolumeReplicationClass and VolumeGroupReplicationClass available",
+			errNoReplicationClassMatch)
 	}
 
 	matchingReplicationClassList := []client.Object{}
@@ -1696,7 +1764,8 @@ func (v *VRGInstance) selectVolumeReplicationClass(
 		v.log.Info(fmt.Sprintf("No %s found to match provisioner and schedule %s/%s", objType,
 			storageClass.Provisioner, v.instance.Spec.Async.SchedulingInterval))
 
-		return nil, fmt.Errorf("no %s found to match provisioner and schedule", objType)
+		return nil, fmt.Errorf("%w: no %s found to match provisioner and schedule",
+			errNoReplicationClassMatch, objType)
 	case 1:
 		return matchingReplicationClassList[0], nil
 	}
@@ -2809,6 +2878,14 @@ func restoreClusterDataObjects[
 	return numRestored, nil
 }
 
+func clearPVClaimRef(pv *corev1.PersistentVolume) {
+	if pv.Spec.ClaimRef != nil {
+		pv.Spec.ClaimRef.UID = ""
+		pv.Spec.ClaimRef.ResourceVersion = ""
+		pv.Spec.ClaimRef.APIVersion = ""
+	}
+}
+
 func (v *VRGInstance) updateExistingPVForSync(pv *corev1.PersistentVolume) error {
 	// In case of sync mode, the pv is never deleted as part of the
 	// failover/relocate process. Hence, the restore may not be
@@ -2828,6 +2905,61 @@ func (v *VRGInstance) updateExistingPVForSync(pv *corev1.PersistentVolume) error
 	return nil
 }
 
+func (v *VRGInstance) updateExistingPVForAdoption(pv *corev1.PersistentVolume) error {
+	clearPVClaimRef(pv)
+	addRestoreAnnotation(pv)
+
+	if err := v.reconciler.Update(v.ctx, pv); err != nil {
+		return fmt.Errorf("failed to update existing PV for adoption: %v, err: %w", pv.Name, err)
+	}
+
+	return nil
+}
+
+func (v *VRGInstance) validateBoundExistingPV(pv *corev1.PersistentVolume, existingPV *corev1.PersistentVolume,
+	log logr.Logger,
+) error {
+	var pvc corev1.PersistentVolumeClaim
+
+	pvcNamespacedName := types.NamespacedName{Name: pv.Spec.ClaimRef.Name, Namespace: pv.Spec.ClaimRef.Namespace}
+	if err := v.reconciler.Get(v.ctx, pvcNamespacedName, &pvc); err != nil {
+		return fmt.Errorf("found bound PV %s to claim %s but unable to validate claim exists: %w", existingPV.GetName(),
+			pvcNamespacedName.String(), err)
+	}
+
+	if rmnutil.ResourceIsDeleted(&pvc) {
+		return fmt.Errorf("existing bound PV %s claim %s deletion timestamp non-zero %v", existingPV.GetName(),
+			pvcNamespacedName.String(), pvc.DeletionTimestamp)
+	}
+
+	// If the PV is bound and matches with the PV we would have restored then return now
+	if v.pvMatches(existingPV, pv) {
+		log.Info("Existing PV matches and is bound to the same claim")
+
+		return nil
+	}
+
+	return fmt.Errorf("existing PV (%s) is bound and doesn't match with the PV to be restored", existingPV.GetName())
+}
+
+// adoptReleasedExistingPV adopts an existing Released PV if its stale claimRef, when present, matches the claim
+// of the backed up PV. Returns error if the claims do not match or the adoption update fails.
+func (v *VRGInstance) adoptReleasedExistingPV(pv *corev1.PersistentVolume, existingPV *corev1.PersistentVolume,
+	log logr.Logger,
+) error {
+	if existingPV.Spec.ClaimRef != nil && pv.Spec.ClaimRef != nil &&
+		(existingPV.Spec.ClaimRef.Namespace != pv.Spec.ClaimRef.Namespace ||
+			existingPV.Spec.ClaimRef.Name != pv.Spec.ClaimRef.Name) {
+		return fmt.Errorf("released PV %s claim %s/%s does not match backed up claim %s/%s", existingPV.Name,
+			existingPV.Spec.ClaimRef.Namespace, existingPV.Spec.ClaimRef.Name,
+			pv.Spec.ClaimRef.Namespace, pv.Spec.ClaimRef.Name)
+	}
+
+	log.Info("PV exists and is Released - adopting it")
+
+	return v.updateExistingPVForAdoption(existingPV)
+}
+
 // validateExistingPV validates if an existing PV matches the passed in PV for certain fields. Returns error
 // if a match fails or a match is not possible given the state of the existing PV
 func (v *VRGInstance) validateExistingPV(pv *corev1.PersistentVolume) error {
@@ -2839,27 +2971,7 @@ func (v *VRGInstance) validateExistingPV(pv *corev1.PersistentVolume) error {
 	}
 
 	if existingPV.Status.Phase == corev1.VolumeBound {
-		var pvc corev1.PersistentVolumeClaim
-
-		pvcNamespacedName := types.NamespacedName{Name: pv.Spec.ClaimRef.Name, Namespace: pv.Spec.ClaimRef.Namespace}
-		if err := v.reconciler.Get(v.ctx, pvcNamespacedName, &pvc); err != nil {
-			return fmt.Errorf("found bound PV %s to claim %s but unable to validate claim exists: %w", existingPV.GetName(),
-				pvcNamespacedName.String(), err)
-		}
-
-		if rmnutil.ResourceIsDeleted(&pvc) {
-			return fmt.Errorf("existing bound PV %s claim %s deletion timestamp non-zero %v", existingPV.GetName(),
-				pvcNamespacedName.String(), pvc.DeletionTimestamp)
-		}
-
-		// If the PV is bound and matches with the PV we would have restored then return now
-		if v.pvMatches(existingPV, pv) {
-			log.Info("Existing PV matches and is bound to the same claim")
-
-			return nil
-		}
-
-		return fmt.Errorf("existing PV (%s) is bound and doesn't match with the PV to be restored", existingPV.GetName())
+		return v.validateBoundExistingPV(pv, existingPV, log)
 	}
 
 	log.Info("PV exists and is not bound", "phase", existingPV.Status.Phase)
@@ -2872,10 +2984,13 @@ func (v *VRGInstance) validateExistingPV(pv *corev1.PersistentVolume) error {
 		return v.updateExistingPVForSync(existingPV)
 	}
 
+	if v.instance.Spec.Async != nil && existingPV.Status.Phase == corev1.VolumeReleased {
+		return v.adoptReleasedExistingPV(pv, existingPV, log)
+	}
+
 	// PV is not bound
 	// In async case, just checking that the PV has the ramen restore annotation is good
-	if existingPV.ObjectMeta.Annotations != nil &&
-		existingPV.ObjectMeta.Annotations[RestoreAnnotation] == RestoredByRamen {
+	if existingPV.GetAnnotations()[RestoreAnnotation] == RestoredByRamen {
 		// Should we check and see if PV in being deleted? Should we just treat it as exists
 		// and then we don't care if deletion takes place later, which is what we do now?
 		log.Info("PV exists and managed by Ramen")
@@ -3026,15 +3141,119 @@ func (v *VRGInstance) processPVSecrets(pv *corev1.PersistentVolume, sc *storagev
 	return nil
 }
 
+func (v *VRGInstance) updatePVNodeAffinityForRestore(
+	pv *corev1.PersistentVolume, sc *storagev1.StorageClass,
+) error {
+	if v.instance.Spec.Async == nil {
+		return nil
+	}
+
+	topologyVal, classKind, className, err := v.accessibleTopologyForStorageClass(sc)
+	if err != nil {
+		if !errors.Is(err, errNoReplicationClassMatch) {
+			return fmt.Errorf("failed to get accessible topology for PV %s: %w", pv.Name, err)
+		}
+
+		v.log.Info("Could not find matching VRC or VGRC for PV, skipping node affinity from topology",
+			"PV", pv.Name, "error", err)
+
+		return nil
+	}
+
+	if topologyVal == "" {
+		return nil
+	}
+
+	affinity, err := accessibleTopologyToNodeAffinity(topologyVal)
+	if err != nil {
+		return fmt.Errorf("failed to create node affinity from accessible topology in %s %s for PV %s: %w",
+			classKind, className, pv.Name, err)
+	}
+
+	if affinity != nil {
+		pv.Spec.NodeAffinity = affinity
+		v.log.Info("Set PV node affinity from accessible topology",
+			"PV", pv.Name, classKind, className)
+	}
+
+	return nil
+}
+
+// accessibleTopologyForStorageClass returns the accessibleTopology parameter from a
+// matching VRC, or from a matching VGRC when no VRC is found (VGRC-only configs).
+func (v *VRGInstance) accessibleTopologyForStorageClass(
+	sc *storagev1.StorageClass,
+) (topologyVal, classKind, className string, err error) {
+	for _, selectGroup := range []bool{false, true} {
+		obj, err := v.selectReplicationClassForStorageClass(sc, selectGroup)
+		if err != nil {
+			if errors.Is(err, errNoReplicationClassMatch) {
+				continue
+			}
+
+			return "", "", "", err
+		}
+
+		switch c := obj.(type) {
+		case *volrep.VolumeReplicationClass:
+			return c.Spec.Parameters[VRCParameterAccessibleTopology], "VRC", c.Name, nil
+		case *volrep.VolumeGroupReplicationClass:
+			return c.Spec.Parameters[VRCParameterAccessibleTopology], "VGRC", c.Name, nil
+		}
+	}
+
+	return "", "", "", fmt.Errorf("%w: no matching VRC or VGRC for storage class %s",
+		errNoReplicationClassMatch, sc.Name)
+}
+
+func accessibleTopologyToNodeAffinity(topologyJSON string) (*corev1.VolumeNodeAffinity, error) {
+	if strings.TrimSpace(topologyJSON) == "null" {
+		return nil, fmt.Errorf("accessible topology must be a JSON array, got null")
+	}
+
+	var segments []map[string]string
+
+	if err := json.Unmarshal([]byte(topologyJSON), &segments); err != nil {
+		return nil, fmt.Errorf("failed to parse accessible topology: %w", err)
+	}
+
+	if len(segments) == 0 {
+		return nil, nil
+	}
+
+	var terms []corev1.NodeSelectorTerm
+
+	for _, seg := range segments {
+		var exprs []corev1.NodeSelectorRequirement
+
+		for key, val := range seg {
+			exprs = append(exprs, corev1.NodeSelectorRequirement{
+				Key:      key,
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{val},
+			})
+		}
+
+		if len(exprs) > 0 {
+			terms = append(terms, corev1.NodeSelectorTerm{MatchExpressions: exprs})
+		}
+	}
+
+	if len(terms) == 0 {
+		return nil, nil
+	}
+
+	return &corev1.VolumeNodeAffinity{
+		Required: &corev1.NodeSelector{NodeSelectorTerms: terms},
+	}, nil
+}
+
 // cleanupForRestore cleans up required PV or PVC fields, to ensure restore succeeds
 // to a new cluster, and rebinding the PVC to an existing PV with the same claimRef
 func (v *VRGInstance) cleanupPVForRestore(pv *corev1.PersistentVolume) error {
 	pv.ResourceVersion = ""
-	if pv.Spec.ClaimRef != nil {
-		pv.Spec.ClaimRef.UID = ""
-		pv.Spec.ClaimRef.ResourceVersion = ""
-		pv.Spec.ClaimRef.APIVersion = ""
-	}
+	delete(pv.Labels, pvLeftBehindLabelKey)
+	clearPVClaimRef(pv)
 
 	// If the PV was annotated with a destination volume handle during S3 upload,
 	// replace the CSI volumeHandle so the PV references the correct volume on
@@ -3054,7 +3273,12 @@ func (v *VRGInstance) cleanupPVForRestore(pv *corev1.PersistentVolume) error {
 
 	v.updatePVClusterIDForRestore(pv, sc)
 
-	return v.processPVSecrets(pv, sc)
+	err = v.processPVSecrets(pv, sc)
+	if err != nil {
+		return err
+	}
+
+	return v.updatePVNodeAffinityForRestore(pv, sc)
 }
 
 // updatePVClusterIDForRestore sets CSI volumeAttributes.clusterID from the target
