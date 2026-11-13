@@ -37,7 +37,7 @@ jobs:
       DRIVER: "container"
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup python
         uses: actions/setup-python@v5
@@ -105,7 +105,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout ramen
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup python
         uses: actions/setup-python@v5
@@ -164,7 +164,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup python
         uses: actions/setup-python@v5
