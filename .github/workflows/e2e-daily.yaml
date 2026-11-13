@@ -26,7 +26,7 @@ jobs:
         run: pip install -e test
 
       - name: Refresh cache
-        uses: nick-fields/retry@v3
+        uses: nick-fields/retry@v4
         with:
           timeout_minutes: 2
           retry_wait_seconds: 60

@@ -42,7 +42,7 @@ jobs:
       run: test/scripts/setup-libvirt
 
     - name: Start clusters
-      uses: nick-fields/retry@v3
+      uses: nick-fields/retry@v4
       with:
         timeout_minutes: 20
         max_attempts: 3
@@ -57,7 +57,7 @@ jobs:
       run: ramenctl deploy test/envs/regional-dr.yaml
 
     - name: Configure ramen
-      uses: nick-fields/retry@v3
+      uses: nick-fields/retry@v4
       with:
         timeout_seconds: 120
         max_attempts: 3
