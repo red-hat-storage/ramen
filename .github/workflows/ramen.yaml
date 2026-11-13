@@ -187,7 +187,7 @@ jobs:
         run: ./hack/setup-kind-cluster.sh
 
       - name: Download image artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ramen-operator
           path: /tmp
@@ -235,7 +235,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download image artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ramen-operator
           path: /tmp
