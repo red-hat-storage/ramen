@@ -20,7 +20,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/k8snetworkplumbingwg/network-attachment-definition-client v1.7.7
 	github.com/kubernetes-csi/external-snapshotter/client/v8 v8.6.0
-	github.com/onsi/ginkgo/v2 v2.28.3
+	github.com/onsi/ginkgo/v2 v2.34.0
 	github.com/onsi/gomega v1.40.0
 	github.com/operator-framework/api v0.27.0
 	github.com/prometheus/client_golang v1.25.0
