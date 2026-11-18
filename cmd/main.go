@@ -20,6 +20,8 @@ import (
 	operatorsv1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
 	recipe "github.com/ramendr/recipe/api/v1alpha1"
 	groupsnapv1beta1 "github.com/red-hat-storage/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
+	restoresv1beta1 "github.com/stolostron/cluster-backup-operator/api/v1beta1"
+	clifecyclev1alpha1 "github.com/stolostron/cluster-lifecycle-api/klusterletconfig/v1alpha1"
 	plrv1 "github.com/stolostron/multicloud-operators-placementrule/pkg/apis/apps/v1"
 	velero "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	uberzap "go.uber.org/zap"
@@ -50,6 +52,7 @@ import (
 	argocdv1alpha1hack "github.com/ramendr/ramen/internal/controller/argocd"
 	rmnutil "github.com/ramendr/ramen/internal/controller/util"
 	_ "github.com/ramendr/ramen/internal/dummy"
+	ramenmanager "github.com/ramendr/ramen/internal/manager"
 )
 
 var (
@@ -146,6 +149,8 @@ func configureController() error {
 		utilruntime.Must(clrapiv1beta1.AddToScheme(scheme))
 		utilruntime.Must(recipe.AddToScheme(scheme))
 		utilruntime.Must(ocmv1.AddToScheme(scheme))
+		utilruntime.Must(clifecyclev1alpha1.AddToScheme(scheme))
+		utilruntime.Must(restoresv1beta1.AddToScheme(scheme))
 	} else {
 		utilruntime.Must(velero.AddToScheme(scheme))
 		utilruntime.Must(volrep.AddToScheme(scheme))
@@ -312,7 +317,7 @@ func main() {
 
 	ctrlOptions, ramenConfig := buildOptions(restCfg, ramenConfig)
 
-	mgr, err := ctrl.NewManager(restCfg, *ctrlOptions)
+	mgr, err := ramenmanager.NewManager(restCfg, *ctrlOptions, controllers.ControllerType)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
