@@ -423,6 +423,7 @@ func filterPVC(reader client.Reader, pvc *corev1.PersistentVolumeClaim, log logr
 // +kubebuilder:rbac:groups=replication.storage.openshift.io,resources=volumegroupreplicationclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=volumeattachments,verbs=get;list;watch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=volumeattributesclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs/status,verbs=get
@@ -431,7 +432,7 @@ func filterPVC(reader client.Reader, pvc *corev1.PersistentVolumeClaim, log logr
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;update
 // +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;update
 // +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=core,resources=persistentvolumes,verbs=get;list;watch;update;patch;create
+// +kubebuilder:rbac:groups=core,resources=persistentvolumes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=volsync.backube,resources=replicationdestinations,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=volsync.backube,resources=replicationdestinations/finalizers,verbs=update
 // +kubebuilder:rbac:groups=volsync.backube,resources=replicationsources,verbs=get;list;watch;create;update;patch;delete
@@ -483,6 +484,7 @@ func (r *VolumeReplicationGroupReconciler) Reconcile(ctx context.Context, req ct
 		namespacedName:    req.NamespacedName.String(),
 		objectStorers:     make(map[string]cachedObjectStorer),
 		storageClassCache: make(map[string]*storagev1.StorageClass),
+		vacCache:          make(map[string]*storagev1.VolumeAttributesClass),
 	}
 
 	// Fetch the VolumeReplicationGroup instance
@@ -576,6 +578,7 @@ type VRGInstance struct {
 	replClassList        *volrep.VolumeReplicationClassList
 	grpReplClassList     *volrep.VolumeGroupReplicationClassList
 	storageClassCache    map[string]*storagev1.StorageClass
+	vacCache             map[string]*storagev1.VolumeAttributesClass
 	vrgObjectProtected   *metav1.Condition
 	kubeObjectsProtected *metav1.Condition
 	vrcUpdated           bool
@@ -604,8 +607,11 @@ const (
 	RestoreAnnotation                = "volumereplicationgroups.ramendr.openshift.io/ramen-restore"
 	RestoredByRamen                  = "True"
 
+	// PV label, set on PVs left behind on the Secondary cluster in Sync (MetroDR) mode. The value is the UID of the VRG
+	pvLeftBehindLabelKey = "ramendr.openshift.io/pv-left-behind-by-ramen"
+
 	// StorageClass label
-	StorageIDLabel = "ramendr.openshift.io/storageid"
+	StorageIDLabel = util.StorageIDLabel
 
 	// StorageClass offloaded label
 	StorageOffloadedLabel = "ramendr.openshift.io/offloaded"
@@ -620,7 +626,7 @@ const (
 	GlobalReplicationLabel = "ramendr.openshift.io/global"
 
 	// Maintenance mode label
-	MModesLabel = "ramendr.openshift.io/maintenancemodes"
+	MModesLabel = util.MModesLabel
 
 	// VolumeReplicationClass and VolumeGroupReplicationClass schedule parameter key
 	ReplicationClassScheduleKey = "schedulingInterval"
@@ -845,112 +851,6 @@ func (v *VRGInstance) updateAsyncPVCs(pvcList *corev1.PersistentVolumeClaimList)
 	return v.separateAsyncPVCs(pvcList)
 }
 
-func isOffloadedByPeerClass(scName, sID string, peerClass *ramendrv1alpha1.PeerClass) bool {
-	if scName != peerClass.StorageClassName {
-		return false
-	}
-
-	if !slices.Contains(peerClass.StorageID, sID) {
-		return false
-	}
-
-	if !peerClass.Offloaded {
-		return false
-	}
-
-	return true
-}
-
-func (v *VRGInstance) isOffloadedByPeerClasses(sc *storagev1.StorageClass) (bool, error) {
-	if !util.HasLabel(sc, StorageIDLabel) {
-		return false, fmt.Errorf("missing %s label in StorageClass (%s)", StorageIDLabel, sc.GetName())
-	}
-
-	sID := sc.GetLabels()[StorageIDLabel]
-
-	for idx := range v.instance.Spec.Async.PeerClasses {
-		if isOffloadedByPeerClass(sc.GetName(), sID, &v.instance.Spec.Async.PeerClasses[idx]) {
-			return true, nil
-		}
-	}
-
-	return false, nil
-}
-
-// processOffloadedPVCs ensures either all PVCs for the VRG are offloaded, or none are. IF all are offloaded then
-// the VR PVC list is updated with the PVC list
-//
-//nolint:gocognit,cyclop,funlen
-func (v *VRGInstance) processOffloadedPVCs(pvcList *corev1.PersistentVolumeClaimList) (bool, error) {
-	if len(v.instance.Spec.Async.PeerClasses) == 0 {
-		return false, nil
-	}
-
-	offloaded := false
-
-	for idx := range pvcList.Items {
-		pvc := &pvcList.Items[idx]
-
-		storageClass, err := v.validateAndGetStorageClass(pvc.Spec.StorageClassName, pvc)
-		if err != nil {
-			return false, err
-		}
-
-		pvcOffloadedBySC := util.HasLabel(storageClass, StorageOffloadedLabel)
-
-		pvcOffloadedByPeer, err := v.isOffloadedByPeerClasses(storageClass)
-		if err != nil {
-			return false, err
-		}
-
-		if pvcOffloadedByPeer != pvcOffloadedBySC {
-			return false, fmt.Errorf(
-				"mismatched peerClass offload support (%t) with current StorageClass "+
-					"(%s) offload support (%t) for PVC (%s/%s)",
-				pvcOffloadedByPeer,
-				*pvc.Spec.StorageClassName,
-				pvcOffloadedBySC,
-				pvc.GetName(),
-				pvc.GetNamespace(),
-			)
-		}
-
-		if idx == 0 {
-			if pvcOffloadedBySC {
-				offloaded = true
-			}
-
-			continue
-		}
-
-		if pvcOffloadedBySC == offloaded {
-			continue
-		}
-
-		return false, fmt.Errorf("invalid list of PVCs to protect, found a mix of offloaded and non-offloaded PVCs")
-	}
-
-	if !offloaded {
-		return offloaded, nil
-	}
-
-	for idx := range pvcList.Items {
-		pvc := &pvcList.Items[idx]
-
-		if err := v.addVolRepConsistencyGroupLabel(pvc); err != nil {
-			return offloaded, fmt.Errorf("failed to label offloaded PVC %s/%s for consistency group (%w)",
-				pvc.GetNamespace(), pvc.GetName(), err)
-		}
-	}
-
-	v.volRepPVCs = make([]corev1.PersistentVolumeClaim, len(pvcList.Items))
-	copy(v.volRepPVCs, pvcList.Items)
-
-	v.log.Info(fmt.Sprintf("Found %d PVCs targeted for offloaded protection", len(v.volRepPVCs)))
-
-	return offloaded, nil
-}
-
 // addVolRepConsistencyGroupLabel ensures that the given PVC is labeled as part of a consistency group.
 // It does this by retrieving the associated VolumeGroupReplicationClass and extracting its replication ID,
 // which is then added as a label to the PVC.
@@ -995,16 +895,14 @@ func (v *VRGInstance) getCGLabelValue(scName *string, pvcName, pvcNamespace stri
 		return "", fmt.Errorf("missing storage class name for PVC %s/%s", pvcNamespace, pvcName)
 	}
 
-	storageClass := &storagev1.StorageClass{}
-	if err := v.reconciler.Get(v.ctx, types.NamespacedName{Name: *scName}, storageClass); err != nil {
-		v.log.Info(fmt.Sprintf("Failed to get the storageclass %s", *scName))
-
-		return "", fmt.Errorf("failed to get the storageclass with name %s (%w)", *scName, err)
+	storageClass, err := v.getStorageClassFromSCName(scName)
+	if err != nil {
+		return "", err
 	}
 
 	storageID, ok := storageClass.GetLabels()[StorageIDLabel]
 	if !ok {
-		v.log.Info("Missing storageID for PVC %s/%s", pvcNamespace, pvcName)
+		v.log.Info(fmt.Sprintf("Missing storageID for PVC %s/%s", pvcNamespace, pvcName))
 
 		return "", fmt.Errorf("missing storageID for PVC %s/%s", pvcNamespace, pvcName)
 	}
@@ -1074,9 +972,8 @@ func (v *VRGInstance) validateSyncPVCs(pvcList *corev1.PersistentVolumeClaimList
 
 	for idx := range pvcList.Items {
 		pvc := &pvcList.Items[idx]
-		scName := pvc.Spec.StorageClassName
 
-		storageClass, err := v.validateAndGetStorageClass(scName, pvc)
+		storageClass, err := v.getStorageClass(pvc)
 		if err != nil {
 			return err
 		}
@@ -1119,13 +1016,6 @@ func (v *VRGInstance) separatePVCUsingPeerClassAndSC(peerClasses []ramendrv1alph
 	peerClass, err := v.findPeerClassMatchingSC(storageClass, peerClasses, pvc)
 	if err != nil {
 		return err
-	}
-
-	if peerClass == nil {
-		msg := fmt.Sprintf("peerClass matching storageClass %s not found for async PVC", storageClass.GetName())
-		v.updatePVCDataReadyCondition(pvc.Namespace, pvc.Name, VRGConditionReasonPeerClassNotFound, msg)
-
-		return errors.New(msg)
 	}
 
 	pvcEnabledForVolSync := util.IsPVCMarkedForVolSync(v.instance.GetAnnotations())
@@ -1184,9 +1074,8 @@ func (v *VRGInstance) separateAsyncPVCs(pvcList *corev1.PersistentVolumeClaimLis
 
 	for idx := range pvcList.Items {
 		pvc := &pvcList.Items[idx]
-		scName := pvc.Spec.StorageClassName
 
-		storageClass, err := v.validateAndGetStorageClass(scName, pvc)
+		storageClass, err := v.getStorageClass(pvc)
 		if err != nil {
 			return err
 		}
@@ -1205,7 +1094,7 @@ func (v *VRGInstance) separateAsyncPVCs(pvcList *corev1.PersistentVolumeClaimLis
 		len(v.volRepPVCs), len(v.volSyncPVCs)))
 
 	if len(pvcList.Items) != (len(v.volRepPVCs) + len(v.volSyncPVCs)) {
-		return fmt.Errorf("no PVCs are procted")
+		return fmt.Errorf("no PVCs are protected")
 	}
 
 	return nil
@@ -1265,12 +1154,12 @@ func (v *VRGInstance) findReplicationClassUsingPeerClass(
 
 func (v *VRGInstance) findVolSnapClass(storageClass *storagev1.StorageClass,
 ) (*snapv1.VolumeSnapshotClass, error) {
-	SnaphotClasses, err := v.volSyncHandler.GetVolumeSnapshotClasses()
+	snapshotClasses, err := v.volSyncHandler.GetVolumeSnapshotClasses()
 	if err != nil {
 		return nil, err
 	}
 
-	for _, snapshotClass := range SnaphotClasses {
+	for _, snapshotClass := range snapshotClasses {
 		sIDFromSnapClass := snapshotClass.GetLabels()[StorageIDLabel]
 
 		matched := sIDFromSnapClass == storageClass.GetLabels()[StorageIDLabel] &&
@@ -1279,25 +1168,9 @@ func (v *VRGInstance) findVolSnapClass(storageClass *storagev1.StorageClass,
 		if matched {
 			return &snapshotClass, nil
 		}
-
-		continue
 	}
 
 	return nil, nil
-}
-
-func (v *VRGInstance) validateAndGetStorageClass(scName *string, pvc *corev1.PersistentVolumeClaim,
-) (*storagev1.StorageClass, error) {
-	if scName == nil || *scName == "" {
-		return nil, fmt.Errorf("missing storage class name for PVC %s/%s", pvc.GetNamespace(), pvc.GetName())
-	}
-
-	storageClass := &storagev1.StorageClass{}
-	if err := v.reconciler.Get(v.ctx, types.NamespacedName{Name: *scName}, storageClass); err != nil {
-		return nil, fmt.Errorf("failed to get the storageclass with name %s (%w)", *scName, err)
-	}
-
-	return storageClass, nil
 }
 
 func (v *VRGInstance) findPeerClassMatchingSC(
@@ -1380,6 +1253,12 @@ func (v *VRGInstance) processForDeletion() ctrl.Result {
 		v.log.Info("Requeuing as reconciling VolumeReplication for deletion failed")
 
 		return v.result
+	}
+
+	if err := v.deleteLeftBehindPVs(); err != nil {
+		v.log.Info("Deleting PVs left behind failed", "error", err)
+
+		return ctrl.Result{Requeue: true}
 	}
 
 	if v.hasGlobalVGRLabel() {
@@ -1519,6 +1398,8 @@ func (v *VRGInstance) processAsPrimary() ctrl.Result {
 		if numOfRestoredRes != 0 {
 			return v.updateVRGConditionsAndStatus(v.result)
 		}
+
+		v.result.Requeue = false
 	}
 
 	if err := v.pvcsDeselectedUnprotect(); err != nil {
@@ -1675,14 +1556,14 @@ func (v *VRGInstance) reconcileAsPrimary() {
 	}
 
 	vrg := v.instance
-	v.result.Requeue = v.reconcileVolSyncAsPrimary(&finalSyncPrepared.volSync)
+	v.result.Requeue = v.reconcileVolSyncAsPrimary(&finalSyncPrepared.volSync) || v.result.Requeue
 	v.reconcileVolRepsAsPrimary()
 
 	if vrg.Spec.PrepareForFinalSync {
 		vrg.Status.PrepareForFinalSyncComplete = finalSyncPrepared.volSync
 	}
 
-	if !v.result.Requeue && v.isVMRecipeProtection() {
+	if !v.result.Requeue && util.IsVMRecipe(v.instance.Spec.KubeObjectProtection) {
 		if err := v.validateVMsForStandaloneProtection(); err != nil {
 			v.result.Requeue = true
 		}
@@ -2147,7 +2028,7 @@ func (v *VRGInstance) updateVRGAutoCleanupCondition() {
 		setVRGAutoCleanupCondition(&v.instance.Status.Conditions, v.instance.Generation,
 			metav1.ConditionFalse, VRGConditionReasonUnused,
 			"Automated Cleanup not applicable: GitOps manages the application's resource lifecycle.")
-	case !v.isVMRecipeProtection():
+	case !util.IsVMRecipe(v.instance.Spec.KubeObjectProtection):
 		// all other discovered apps protection except vm-recipe
 		setVRGAutoCleanupCondition(&v.instance.Status.Conditions, v.instance.Generation,
 			metav1.ConditionFalse, VRGConditionReasonUnused,
@@ -2168,10 +2049,10 @@ func (v *VRGInstance) updateVRGAutoCleanupCondition() {
 	}
 }
 
-// updateVRGConditions updates four summary conditions VRGConditionTypeDataReady,
-// VRGConditionTypeClusterDataProtected, VRGConditionTypeDataProtected and
-// VRGConditionTypeDestinationInfoAvailable, at the VRG level based on the
-// corresponding PVC level conditions in the VRG:
+// updateVRGConditions updates five summary conditions VRGConditionTypeDataReady,
+// VRGConditionTypeClusterDataProtected, VRGConditionTypeDataProtected,
+// VRGConditionTypeDestinationInfoAvailable and VRGConditionTypeReplicationHealthy,
+// at the VRG level based on the corresponding PVC level conditions in the VRG:
 //
 // The VRGConditionTypeClusterDataReady summary condition is not a PVC level
 // condition and is updated elsewhere.
@@ -2204,6 +2085,10 @@ func (v *VRGInstance) updateVRGConditions() {
 
 	if destInfoCond := v.aggregateVolRepDestinationInfoAvailableCondition(); destInfoCond != nil {
 		v.logAndSetConditions(VRGConditionTypeDestinationInfoAvailable, destInfoCond)
+	}
+
+	if replicationHealthyCond := v.aggregateVolRepReplicationHealthyCondition(); replicationHealthyCond != nil {
+		v.logAndSetConditions(VRGConditionTypeReplicationHealthy, replicationHealthyCond)
 	}
 
 	v.updateVRGLastGroupSyncTime()
@@ -2446,52 +2331,6 @@ func (r *VolumeReplicationGroupReconciler) filterGlobalVGRVRGs(
 	return req
 }
 
-func (r *VolumeReplicationGroupReconciler) filterVRGForOffloadedVGR(
-	vgr *volrep.VolumeGroupReplication, log logr.Logger,
-) []reconcile.Request {
-	req := []reconcile.Request{}
-
-	// Get VRG owner information from VGR labels
-	ownerNamespace, ownerName, ok := util.OwnerNamespaceNameAndName(vgr.GetLabels())
-	if !ok {
-		log.V(1).Info("VGR does not have owner labels, skipping")
-
-		return req
-	}
-
-	// Fetch the VRG using the owner labels
-	vrg := &ramendrv1alpha1.VolumeReplicationGroup{}
-	vrgNamespacedName := types.NamespacedName{
-		Namespace: ownerNamespace,
-		Name:      ownerName,
-	}
-
-	if err := r.Client.Get(context.TODO(), vrgNamespacedName, vrg); err != nil {
-		if k8serrors.IsNotFound(err) {
-			log.V(1).Info("VRG not found for VGR", "vrg", vrgNamespacedName)
-		} else {
-			log.Error(err, "Failed to get VRG for VGR", "vrg", vrgNamespacedName)
-		}
-
-		return req
-	}
-
-	// Compare VGR's LastSyncTime with VRG's LastGroupSyncTime
-	// If they differ, enqueue the VRG for reconciliation
-	if !reflect.DeepEqual(vgr.Status.LastSyncTime, vrg.Status.LastGroupSyncTime) {
-		req = append(req, reconcile.Request{
-			NamespacedName: vrgNamespacedName,
-		})
-
-		log.Info("Enqueuing VRG for offloaded VGR sync time change",
-			"vrg", vrgNamespacedName,
-			"vgrLastSyncTime", vgr.Status.LastSyncTime,
-			"vrgLastGroupSyncTime", vrg.Status.LastGroupSyncTime)
-	}
-
-	return req
-}
-
 func (r *VolumeReplicationGroupReconciler) VRMapFunc(ctx context.Context, obj client.Object) []reconcile.Request {
 	log := ctrl.Log.WithName("vrmap").WithName("VolumeReplicationGroup")
 
@@ -2682,7 +2521,7 @@ func (v *VRGInstance) CheckForVMConflictOnPrimary() error {
 	foundVMsSet := sets.NewString(foundVMs...)
 	protectedVMsSet := sets.NewString(vmList...)
 
-	if !(foundVMsSet.Equal(protectedVMsSet)) {
+	if !foundVMsSet.Equal(protectedVMsSet) {
 		v.log.Info(fmt.Sprintf("VMs found matching label selector are : %v"+
 			" and the list of VMs being protected are: %v "+
 			". This may impact failover or recovery operations.", foundVMsSet, protectedVMsSet))
@@ -2778,9 +2617,9 @@ func (v *VRGInstance) aggregateVRGNoClusterDataConflictCondition() *metav1.Condi
 		return vmConflictCondition
 	}
 
-	// Priortize the resource conflict condition on Primary cluster
+	// Prioritize the resource conflict condition on Primary cluster
 	if vmResourceConflict && pvcResourceConflict {
-		return v.PriortizePrimaryClusterDataConflictCondition(vmConflictCondition, pvcConflictCondition)
+		return v.PrioritizePrimaryClusterDataConflictCondition(vmConflictCondition, pvcConflictCondition)
 	}
 
 	if vmResourceConflict {
@@ -2790,7 +2629,7 @@ func (v *VRGInstance) aggregateVRGNoClusterDataConflictCondition() *metav1.Condi
 	return pvcConflictCondition
 }
 
-func (v *VRGInstance) PriortizePrimaryClusterDataConflictCondition(
+func (v *VRGInstance) PrioritizePrimaryClusterDataConflictCondition(
 	vmConflictCondition, pvcConflictCondition *metav1.Condition,
 ) *metav1.Condition {
 	if vmConflictCondition.Reason == pvcConflictCondition.Reason {
@@ -2810,7 +2649,7 @@ func (v *VRGInstance) PriortizePrimaryClusterDataConflictCondition(
 func (v *VRGInstance) aggregateVMNoClusterDataConflictCondition() *metav1.Condition {
 	var msg string
 
-	if v.isVMRecipeProtection() {
+	if util.IsVMRecipe(v.instance.Spec.KubeObjectProtection) {
 		if err := v.validateVMsForStandaloneProtection(); err != nil {
 			v.log.Error(err, "this discrepancy indicates that the current label selector does not "+
 				"accurately reflect the intended set of protected VMs")
@@ -2838,16 +2677,6 @@ func (v *VRGInstance) clusterDataConflict(msg string, status metav1.ConditionSta
 	}
 
 	return nil
-}
-
-func (v *VRGInstance) isVMRecipeProtection() bool {
-	if v.instance.Spec.KubeObjectProtection != nil && v.instance.Spec.KubeObjectProtection.RecipeRef != nil {
-		if v.instance.Spec.KubeObjectProtection.RecipeRef.Name == recipecore.VMRecipeName {
-			return true
-		}
-	}
-
-	return false
 }
 
 func (v *VRGInstance) aggregateVolRepClusterDataConflictCondition() *metav1.Condition {
@@ -2959,9 +2788,27 @@ func PruneAnnotations(annotations map[string]string) map[string]string {
 	return result
 }
 
+// PruneLabels copies labels and drops labels that are meaningful only on the
+// cluster where the PVC lives. The consistency-group value is
+// <namespace>-<this cluster's storage id> for CephFS, so the peer must not
+// receive it. Each cluster writes its own consistency-group label onto the local PVC.
+func PruneLabels(pvcLabels map[string]string) map[string]string {
+	result := make(map[string]string, len(pvcLabels))
+
+	for key, value := range pvcLabels {
+		if key == util.ConsistencyGroupLabel {
+			continue
+		}
+
+		result[key] = value
+	}
+
+	return result
+}
+
 func (v *VRGInstance) aggregateVRGAutoCleanupCondition() *metav1.Condition {
 	cur := util.FindCondition(v.instance.Status.Conditions, VRGConditionTypeAutoCleanup)
-	if !v.isVMRecipeProtection() ||
+	if !util.IsVMRecipe(v.instance.Spec.KubeObjectProtection) ||
 		len(v.volSyncPVCs) > 0 {
 		return cur
 	}
@@ -3115,4 +2962,42 @@ func (v *VRGInstance) classifyVMStaticIP(
 	)
 
 	return info, nil
+}
+
+// isSingleGroupRestore determines if the VRG is configured to protect VirtualMachine resources.
+// Returns true for:
+// 1. vm-recipe: Explicitly protects VMs
+// 2. Discovered application protection at namespace level with label selector
+// Note: Custom recipes are deliberately ignored. Determines namespace level protection based on VRG spec.
+func (v *VRGInstance) isSingleGroupRestore() bool {
+	// Check if using vm-recipe - always protects VMs
+	if util.IsVMRecipe(v.instance.Spec.KubeObjectProtection) {
+		v.log.Info("VRG is using vm-recipe - VMs are being protected")
+
+		return true
+	}
+
+	// Check for namespace-level protection (not custom recipe)
+	if v.isNamespaceScopedVMProtection() {
+		v.log.Info("VRG is using namespace-level protection with label selector - likely protecting VMs")
+
+		return true
+	}
+
+	return false
+}
+
+// isNamespaceLevelVMProtection returns true when VM protection is configured
+// through protected namespaces and a kube object selector, and is not using
+// a custom recipe.
+func (v *VRGInstance) isNamespaceScopedVMProtection() bool {
+	namespaces := v.instance.Spec.ProtectedNamespaces
+	if namespaces == nil || len(*namespaces) == 0 {
+		return false
+	}
+
+	kop := v.instance.Spec.KubeObjectProtection
+
+	return kop != nil && kop.KubeObjectSelector != nil &&
+		v.instance.Spec.KubeObjectProtection.RecipeRef == nil
 }

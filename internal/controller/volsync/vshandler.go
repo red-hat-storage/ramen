@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	volsyncv1alpha1 "github.com/backube/volsync/api/v1alpha1"
+	volsyncutils "github.com/backube/volsync/controllers/utils"
 	"github.com/go-logr/logr"
 	snapv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -52,14 +53,14 @@ const (
 	SchedulingIntervalMinLength int = 2
 	CronSpecMaxDayOfMonth       int = 28
 
-	VolSyncDoNotDeleteLabel    = "volsync.backube/do-not-delete" // TODO: point to volsync constant once it is available
+	VolSyncDoNotDeleteLabel    = volsyncutils.DoNotDeleteLabelKey
 	VolSyncDoNotDeleteLabelVal = "true"
 
 	OwnerNameAnnotation      = "ramendr.openshift.io/owner-name"
 	OwnerNamespaceAnnotation = "ramendr.openshift.io/owner-namespace"
 
 	// StorageClass label
-	StorageIDLabel = "ramendr.openshift.io/storageid"
+	StorageIDLabel = util.StorageIDLabel
 
 	PVAnnotationRetentionKey   = "volumereplicationgroups.ramendr.openshift.io/volsync-retained"
 	PVAnnotationRetentionValue = "retained"
@@ -3323,7 +3324,7 @@ func (v *VSHandler) WaitForMountJobDeletion(pvcName, pvcNamespace string) (bool,
 	// Job still exists, check if it's being deleted
 	if job.DeletionTimestamp != nil {
 		v.log.V(1).Info("Mount job deletion in progress", "jobName", jobName,
-			"deletionTimestamp", job.DeletionTimestamp)
+			"deletionTimestamp", job.DeletionTimestamp.Time)
 
 		return false, nil // Still deleting, need to wait
 	}

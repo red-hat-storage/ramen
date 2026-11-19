@@ -179,21 +179,21 @@ clusters. *Ramen* makes this easy using minikube, but you need enough resources:
 
    ```
    curl --fail --silent --show-error --location --output velero.tar.gz \
-       https://github.com/vmware-tanzu/velero/releases/download/v1.14.0/velero-v1.14.0-linux-amd64.tar.gz
-   tar xf velero.tar.gz --strip 1 velero-v1.14.0-linux-amd64/velero
+       https://github.com/vmware-tanzu/velero/releases/download/v1.18.4/velero-v1.18.4-linux-amd64.tar.gz
+   tar xf velero.tar.gz --strip 1 velero-v1.18.4-linux-amd64/velero
    sudo install velero /usr/local/bin
    rm velero.tar.gz velero
    velero version
    ```
 
    For more info see
-   [Velero Basic Install](https://velero.io/docs/v1.14/basic-install/)
+   [Velero Basic Install](https://velero.io/docs/v1.18/basic-install/)
 
 1. Install the `virtctl` tool.
 
    ```
    curl --fail --silent --show-error --location --output virtctl \
-       https://github.com/kubevirt/kubevirt/releases/download/v1.6.0/virtctl-v1.6.0-linux-amd64
+       https://github.com/kubevirt/kubevirt/releases/download/v1.9.1/virtctl-v1.9.1-linux-amd64
    sudo install virtctl /usr/local/bin
    rm virtctl
    virtctl version
@@ -202,18 +202,25 @@ clusters. *Ramen* makes this easy using minikube, but you need enough resources:
    For more info see
    [virtctl install](https://kubevirt.io/quickstart_minikube/#virtctl)
 
-1. Install `mc` tool
+1. Install `mcli` tool
 
    ```
-   curl --fail --silent --show-error --location --output mc \
-       https://dl.min.io/client/mc/release/linux-amd64/mc
-   sudo install mc /usr/local/bin
-   rm mc
-   mc --version
+   bash -o pipefail -c 'curl --fail --silent --show-error --location \
+       https://github.com/pgsty/mc/releases/download/RELEASE.2026-09-16T00-00-00Z/mcli_20260916000000.0.0_linux_amd64.tar.gz \
+       | tar xzf - mcli'
+   sudo install mcli /usr/local/bin
+   rm mcli
+   mcli --version
    ```
 
    For more info see
-   [MinIO Client Quickstart](https://min.io/docs/minio/linux/reference/minio-mc.html#quickstart)
+   [Silo Client (mcli / mc)](https://silo.pgsty.com/reference/minio-mc/)
+
+   **NOTE**: If you have the old `mc` installed, remove it:
+
+   ```
+   sudo rm -f /usr/local/bin/mc
+   ```
 
 1. Install `kustomize` tool
 
@@ -246,20 +253,20 @@ clusters. *Ramen* makes this easy using minikube, but you need enough resources:
 
    ```
    bash -o pipefail <<'EOF'
-   tag="$(curl -fsSL https://api.github.com/repos/nirs/kubectl-gather/releases/latest | jq -r .tag_name)"
    os="$(uname | tr '[:upper:]' '[:lower:]')"
    machine="$(uname -m)"
    if [ "$machine" = "aarch64" ]; then machine="arm64"; fi
    if [ "$machine" = "x86_64" ]; then machine="amd64"; fi
-   curl -L -o kubectl-gather https://github.com/nirs/kubectl-gather/releases/download/$tag/kubectl-gather-$tag-$os-$machine
+   curl --fail --silent --show-error --location --output kubectl-gather \
+       https://github.com/nirs/kubectl-gather/releases/latest/download/kubectl-gather-$os-$machine
    sudo install kubectl-gather /usr/local/bin
    rm kubectl-gather
    EOF
    kubectl gather --version
    ```
 
-   kubectl-gather version 0.6.0 or later is required. Tested with version 0.8.0.
-   For more info see [kubectl-gather](https://github.com/nirs/kubectl-gather)
+   kubectl-gather version v0.15.0 or later is required. For more info see
+   [kubectl-gather](https://github.com/nirs/kubectl-gather)
 
 1. Install `helm` tool - on Fedora you can use:
 

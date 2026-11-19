@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/viper"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/validation"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -99,11 +100,7 @@ func (a *Deployer) Equal(b *Deployer) bool {
 		return false
 	}
 
-	if a.Recipe != nil && b.Recipe != nil {
-		if *a.Recipe != *b.Recipe {
-			return false
-		}
-	} else if a.Recipe != b.Recipe {
+	if !ptr.Equal(a.Recipe, b.Recipe) {
 		return false
 	}
 
@@ -263,6 +260,19 @@ func validateClusters(config *Config) error {
 
 	if config.Clusters["c2"].Kubeconfig == "" {
 		return fmt.Errorf("failed to find c2 cluster in configuration")
+	}
+
+	// Ensure no two clusters share the same kubeconfig path.
+	seen := make(map[string]string)
+
+	for _, name := range slices.Sorted(maps.Keys(config.Clusters)) {
+		kubeconfig := config.Clusters[name].Kubeconfig
+		if other, exists := seen[kubeconfig]; exists {
+			return fmt.Errorf("clusters %q and %q use the same kubeconfig path %q",
+				other, name, kubeconfig)
+		}
+
+		seen[kubeconfig] = name
 	}
 
 	return nil
