@@ -58,9 +58,13 @@ const (
 	// with existing PlacementDecision resources
 	MaxPlacementDecisionConflictCount = 5
 
+	// ClusterNameLabelKey is the label OCM sets on every ManagedCluster with the cluster's name, and is the key
+	// used by a Placement predicate to select a cluster by name
+	ClusterNameLabelKey = "name"
+
 	DestinationClusterAnnotationKey = "drplacementcontrol.ramendr.openshift.io/destination-cluster"
 
-	IsSubmarinerEnabledAnnotation    = "drplacementcontrol.ramendr.openshift.io/is-submariner-enabled"
+	IsSubmarinerEnabledAnnotation    = rmnutil.IsSubmarinerEnabledAnnotation
 	IsSubmarinerEnabledAnnotationVal = "true"
 )
 
@@ -118,6 +122,9 @@ func (r *DRPlacementControlReconciler) SetupWithManager(mgr ctrl.Manager, ramenC
 // +kubebuilder:rbac:groups=cluster.open-cluster-management.io,resources=placements/finalizers,verbs=update
 // +kubebuilder:rbac:groups=argoproj.io,resources=applicationsets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cluster.open-cluster-management.io,resources=restores,verbs=get;list;watch
+// +kubebuilder:rbac:groups=config.open-cluster-management.io,resources=klusterletconfigs,verbs=list;watch;create
+// +kubebuilder:rbac:groups=config.open-cluster-management.io,resources=klusterletconfigs,resourceNames=global,verbs=get;update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -155,6 +162,12 @@ func (r *DRPlacementControlReconciler) Reconcile(ctx context.Context, req ctrl.R
 		}
 
 		return ctrl.Result{}, fmt.Errorf("failed to get DRPC object: %w", err)
+	}
+
+	// Hub recovery: when an ACM Restore restores managed clusters, ensure the global
+	// KlusterletConfig carries the AppliedManifestWork eviction grace period.
+	if err := EnsureKlusterletConfigForRestore(ctx, r.Client); err != nil {
+		logger.Info("Failed to ensure KlusterletConfig for hub recovery", "error", err.Error())
 	}
 
 	// Save a copy of the instance status to be used for the VRG status update comparison
@@ -1103,11 +1116,19 @@ func (r *DRPlacementControlReconciler) getDRPCPlacementRule(ctx context.Context,
 	return nil
 }
 
+// finalizePlacement removes the DRPC finalizer from the user PlacementRule/Placement. For a Placement, it also
+// aligns the cluster name in the "name In [...]" predicate match expressions with the cluster in its
+// PlacementDecision, so that the Placement keeps selecting the cluster the workload is running on. The predicate
+// is left alone if the Placement is itself being deleted.
 func (r *DRPlacementControlReconciler) finalizePlacement(
 	ctx context.Context,
 	placementObj client.Object,
 ) error {
 	controllerutil.RemoveFinalizer(placementObj, DRPCFinalizer)
+
+	if !rmnutil.ResourceIsDeleted(placementObj) {
+		r.alignPlacementPredicateWithDecision(placementObj)
+	}
 
 	err := r.Update(ctx, placementObj)
 	if err != nil {
@@ -1115,6 +1136,52 @@ func (r *DRPlacementControlReconciler) finalizePlacement(
 	}
 
 	return nil
+}
+
+// alignPlacementPredicateWithDecision updates, in memory, the cluster name of the Placement's "name In [...]"
+// predicate to the cluster of its PlacementDecision. It does nothing for a PlacementRule, or when no cluster
+// has been decided.
+func (r *DRPlacementControlReconciler) alignPlacementPredicateWithDecision(placementObj client.Object) {
+	placement := ConvertToPlacement(placementObj)
+	if placement == nil {
+		return
+	}
+
+	clusterName := r.getClusterDecisionFromPlacement(placement).ClusterName
+	if clusterName == "" {
+		return
+	}
+
+	if syncPlacementPredicateClusterName(placement, clusterName) {
+		r.Log.Info("Updating Placement predicate to match PlacementDecision",
+			"Placement", client.ObjectKeyFromObject(placement), "Cluster", clusterName)
+	}
+}
+
+// syncPlacementPredicateClusterName sets the values of every "name In [...]" match expression found in the
+// Placement's required cluster selector predicates to the passed in cluster name. It returns true if the
+// Placement was modified, and false if all matching expressions already carried only that cluster name.
+func syncPlacementPredicateClusterName(placement *clrapiv1beta1.Placement, clusterName string) bool {
+	desired := []string{clusterName}
+	changed := false
+
+	for i := range placement.Spec.Predicates {
+		expressions := placement.Spec.Predicates[i].RequiredClusterSelector.LabelSelector.MatchExpressions
+
+		for j := range expressions {
+			expr := &expressions[j]
+			if expr.Key != ClusterNameLabelKey || expr.Operator != metav1.LabelSelectorOpIn {
+				continue
+			}
+
+			if !slices.Equal(expr.Values, desired) {
+				expr.Values = slices.Clone(desired)
+				changed = true
+			}
+		}
+	}
+
+	return changed
 }
 
 func (r *DRPlacementControlReconciler) updateAndSetOwner(
@@ -1663,6 +1730,7 @@ func (r *DRPlacementControlReconciler) updateResourceCondition(
 	}
 
 	updateDRPCProtectedCondition(drpc, vrg, clusterName)
+	updateDRPCReplicationHealthyCondition(drpc, vrg)
 }
 
 // getVRG retrieves a VRG either from the provided map or fetches it from the managed cluster/S3 store.
@@ -3199,4 +3267,84 @@ func (r *DRPlacementControlReconciler) drpcProtectVMInNS(drpc *rmn.DRPlacementCo
 	// No overlap on any key: both DRPCs use vm-recipe and protect disjoint VMs
 	// in the same namespace — this is explicitly supported, skip the conflict check.
 	return true
+}
+
+func (r *DRPlacementControlReconciler) switchClusterDecisionRetainFailover(
+	ctx context.Context,
+	placement interface{},
+	cluster string,
+) error {
+	switch obj := placement.(type) {
+	case *plrv1.PlacementRule:
+		return r.switchPlacementRuleClusterDecisionRetainFailover(ctx, obj, cluster)
+	case *clrapiv1beta1.Placement:
+		return r.switchPlacementClusterDecisionRetainFailover(ctx, obj, cluster)
+	default:
+		return fmt.Errorf("failed to find Placement or PlacementRule")
+	}
+}
+
+func (r *DRPlacementControlReconciler) switchPlacementRuleClusterDecisionRetainFailover(
+	ctx context.Context,
+	placement *plrv1.PlacementRule,
+	cluster string,
+) error {
+	return nil
+}
+
+// switchPlacementClusterDecisionRetainFailover updates decisions so that the reason
+// PlacementDecisionReasonFailoverRetained is removed from clusterName (reverting it to clusterName),
+// and applied to any other cluster decisions.
+func (r *DRPlacementControlReconciler) switchPlacementClusterDecisionRetainFailover(
+	ctx context.Context,
+	placement *clrapiv1beta1.Placement,
+	cluster string,
+) error {
+	plDecision, err := r.getPlacementDecisionFromPlacement(placement)
+	if err != nil {
+		return err
+	}
+
+	if plDecision == nil {
+		return nil
+	}
+
+	updated := false
+
+	for idx := range plDecision.Status.Decisions {
+		d := &plDecision.Status.Decisions[idx]
+
+		if d.ClusterName == cluster {
+			// If the target cluster currently has RetainedForFailover, revert it back to cluster name
+			if d.Reason == PlacementDecisionReasonFailoverRetained {
+				d.Reason = d.ClusterName
+				updated = true
+			}
+		} else {
+			// All other clusters receive RetainedForFailover
+			if d.Reason != PlacementDecisionReasonFailoverRetained {
+				d.Reason = PlacementDecisionReasonFailoverRetained
+				updated = true
+			}
+		}
+	}
+
+	if !updated {
+		return nil
+	}
+
+	if err := r.Status().Update(ctx, plDecision); err != nil {
+		return fmt.Errorf(
+			"failed to update placementDecision status to switch retained failover reason (%w)",
+			err,
+		)
+	}
+
+	r.Log.Info(
+		"Updated PlacementDecision to switch retained failover cluster decision",
+		"ActiveCluster", cluster,
+		"PlacementDecision", plDecision.Status.Decisions,
+	)
+
+	return nil
 }

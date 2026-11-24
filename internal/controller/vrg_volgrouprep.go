@@ -509,7 +509,7 @@ func (v *VRGInstance) getVGRUsingSCLabel(pvc *corev1.PersistentVolumeClaim) (*vo
 
 // getVGRClassReplicationID is a utility function that fetches the replicationID for the PVC looking at the class labels
 func (v *VRGInstance) getVGRClassReplicationID(pvc *corev1.PersistentVolumeClaim) (string, error) {
-	storageClass, err := v.validateAndGetStorageClass(pvc.Spec.StorageClassName, pvc)
+	storageClass, err := v.getStorageClass(pvc)
 	if err != nil {
 		return "", err
 	}
@@ -893,7 +893,7 @@ func (v *VRGInstance) updateVGR(pvcs []*corev1.PersistentVolumeClaim,
 func (v *VRGInstance) createVGR(vrNamespacedName types.NamespacedName,
 	pvcs []*corev1.PersistentVolumeClaim, state volrep.ReplicationState,
 ) error {
-	storageClass, err := v.validateAndGetStorageClass(pvcs[0].Spec.StorageClassName, pvcs[0])
+	storageClass, err := v.getStorageClass(pvcs[0])
 	if err != nil {
 		return err
 	}
@@ -1011,7 +1011,8 @@ func (v *VRGInstance) deleteVGR(vrNamespacedName types.NamespacedName, log logr.
 		return nil
 	}
 
-	v.log.Info("Deleted VolumeGroupReplication resource %s/%s", vrNamespacedName.Namespace, vrNamespacedName.Name)
+	v.log.Info(fmt.Sprintf("Deleted VolumeGroupReplication resource %s/%s",
+		vrNamespacedName.Namespace, vrNamespacedName.Name))
 
 	return v.ensureVRDeletedFromAPIServer(vrNamespacedName, cr, log)
 }

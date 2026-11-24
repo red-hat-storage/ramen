@@ -11,6 +11,7 @@ rules:
   - persistentvolumes
   verbs:
   - create
+  - delete
   - get
   - list
   - patch
@@ -290,6 +291,7 @@ rules:
   - storage.k8s.io
   resources:
   - volumeattachments
+  - volumeattributesclasses
   verbs:
   - get
   - list
