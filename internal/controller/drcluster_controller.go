@@ -84,6 +84,10 @@ const (
 	NetworkFencePrefix = "network-fence"
 )
 
+const (
+	VRCParameterAccessibleTopology = "ramendr.openshift.io/accessibleTopology"
+)
+
 type DRClusterMetrics struct {
 	InvalidCIDRsDetectedMetrics
 }
