@@ -35,10 +35,10 @@ require (
 	go.uber.org/zap v1.28.0
 	golang.org/x/time v0.16.0
 	k8s.io/api v0.37.2
-	k8s.io/apiextensions-apiserver v0.37.1
+	k8s.io/apiextensions-apiserver v0.37.2
 	k8s.io/apimachinery v0.37.2
 	k8s.io/client-go v12.0.0+incompatible
-	k8s.io/component-base v0.37.1
+	k8s.io/component-base v0.37.2
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
 	kubevirt.io/api v1.6.0
@@ -149,7 +149,7 @@ require (
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	k8s.io/apiserver v0.37.1 // indirect
+	k8s.io/apiserver v0.37.2 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kubectl v0.36.0 // indirect
 	k8s.io/streaming v0.37.2 // indirect
