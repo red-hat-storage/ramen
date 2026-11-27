@@ -44,33 +44,46 @@ func TestDR(dt *testing.T) {
 	deploySpecs := config.DeployersMap(Ctx.Config())
 
 	for _, tc := range Ctx.Config().Tests {
-		pvcSpec, ok := pvcSpecs[tc.PVCSpec]
-		if !ok {
-			panic("unknown pvcSpec")
-		}
-
-		workload, err := workloads.New(tc.Workload, Ctx.Config().Repo.Branch, pvcSpec)
-		if err != nil {
-			panic(err)
-		}
-
-		deployerSpec, ok := deploySpecs[tc.Deployer]
-		if !ok {
-			panic("unknown deployer")
-		}
-
-		deployer, err := deployers.New(deployerSpec)
-		if err != nil {
-			panic(err)
-		}
-
-		ctx := test.NewContext(Ctx, tc.ContextName(), workload, deployer)
-		t.Run(ctx.Name(), func(dt *testing.T) {
-			t := test.WithLog(dt, ctx.Logger())
+		name := tc.ContextName()
+		t.Run(name, func(dt *testing.T) {
+			t := test.WithLog(dt, Ctx.Logger().Named(name))
 			t.Parallel()
+
+			ctx := setupTest(t, tc, pvcSpecs, deploySpecs)
 			runTestFlow(t, ctx)
 		})
 	}
+}
+
+func setupTest(
+	t *test.T,
+	tc config.Test,
+	pvcSpecs map[string]config.PVCSpec,
+	deploySpecs map[string]config.Deployer,
+) test.Context {
+	t.Helper()
+
+	pvcSpec, ok := pvcSpecs[tc.PVCSpec]
+	if !ok {
+		t.Fatalf("Unknown PVC spec %q", tc.PVCSpec)
+	}
+
+	workload, err := workloads.New(Ctx.Context(), tc.Workload, Ctx.Config().Repo, pvcSpec)
+	if err != nil {
+		t.Fatalf("Failed to create workload %q: %v", tc.Workload, err)
+	}
+
+	deployerSpec, ok := deploySpecs[tc.Deployer]
+	if !ok {
+		t.Fatalf("Unknown deployer %q", tc.Deployer)
+	}
+
+	deployer, err := deployers.New(deployerSpec)
+	if err != nil {
+		t.Fatalf("Failed to create deployer %q: %v", tc.Deployer, err)
+	}
+
+	return test.NewContext(Ctx, tc.ContextName(), workload, deployer)
 }
 
 func runTestFlow(t *test.T, ctx test.Context) {

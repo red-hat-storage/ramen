@@ -4,14 +4,45 @@ import (
 	"testing"
 
 	"github.com/ramendr/ramen/e2e/config"
+	"github.com/ramendr/ramen/e2e/helpers"
 	"github.com/ramendr/ramen/e2e/workloads"
 )
+
+func TestNewVM(t *testing.T) {
+	t.Parallel()
+
+	// Pin the VM sample revision so the fixture stays the same when upstream main changes.
+	repo := config.Repo{
+		URL:    "https://github.com/RamenDR/ocm-ramen-samples.git",
+		Branch: "7a778cca8005bd90da4188d7d3946c13d8ac359d",
+	}
+	pvcSpec := config.PVCSpec{
+		Name:             "rbd",
+		StorageClassName: "rook-ceph-block",
+		AccessModes:      "ReadWriteOnce",
+	}
+
+	vm, err := workloads.NewVM(t.Context(), repo, pvcSpec)
+	if err != nil {
+		t.Fatalf("NewVM: %v", err)
+	}
+
+	expected := &workloads.VM{
+		Name:    "vm-pvc-rbd",
+		Branch:  repo.Branch,
+		PVCSpec: pvcSpec,
+	}
+
+	if diff := helpers.UnifiedDiff(t, expected, vm); diff != "" {
+		t.Fatalf("vm mismatch:\n%s", diff)
+	}
+}
 
 func TestVMKustomizePatches(t *testing.T) {
 	t.Parallel()
 
-	storageClassName := "test-sc"
-	accessMode := "ReadWriteMany"
+	storageClassName := "rook-ceph-block"
+	accessMode := "ReadWriteOnce"
 
 	vm := workloads.VM{
 		PVCSpec: config.PVCSpec{
@@ -33,8 +64,8 @@ func TestVMKustomizePatches(t *testing.T) {
 		`"target":{"kind":"VirtualMachine","name":"vm"}` +
 		`},{` +
 		`"patch":"[` +
-		`{\"op\":\"add\",\"path\":\"/spec/storageClassName\",\"value\":\"test-sc\"},` +
-		`{\"op\":\"add\",\"path\":\"/spec/accessModes\",\"value\":[\"ReadWriteMany\"]}` +
+		`{\"op\":\"add\",\"path\":\"/spec/storageClassName\",\"value\":\"rook-ceph-block\"},` +
+		`{\"op\":\"add\",\"path\":\"/spec/accessModes\",\"value\":[\"ReadWriteOnce\"]}` +
 		`]",` +
 		`"target":{"kind":"PersistentVolumeClaim","name":"root-disk"}` +
 		`}]}`
@@ -50,7 +81,7 @@ func TestVMKustomizeRejectsEmptyStorageClass(t *testing.T) {
 	vm := workloads.VM{
 		PVCSpec: config.PVCSpec{
 			Name:        "rbd",
-			AccessModes: "ReadWriteMany",
+			AccessModes: "ReadWriteOnce",
 		},
 	}
 
@@ -66,7 +97,7 @@ func TestVMKustomizeRejectsEmptyAccessModes(t *testing.T) {
 	vm := workloads.VM{
 		PVCSpec: config.PVCSpec{
 			Name:             "rbd",
-			StorageClassName: "test-sc",
+			StorageClassName: "rook-ceph-block",
 		},
 	}
 
