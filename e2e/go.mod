@@ -7,7 +7,7 @@ go 1.26.0
 toolchain go1.27.2
 
 require (
-	github.com/aymanbagabas/go-udiff v0.4.1
+	github.com/aymanbagabas/go-udiff v0.4.2
 	github.com/go-logr/zapr v1.3.0
 	github.com/ramendr/ramen/api v0.1.0
 	github.com/ramendr/recipe v0.0.0-20250507125257-0295a01da567
@@ -19,7 +19,7 @@ require (
 	k8s.io/klog/v2 v2.140.0
 	k8s.io/kubectl v0.37.2
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd
-	kubevirt.io/api v1.9.1
+	kubevirt.io/api v1.10.0
 	open-cluster-management.io/api v1.4.0
 	open-cluster-management.io/multicloud-operators-channel v0.16.0
 	open-cluster-management.io/multicloud-operators-subscription v0.16.0

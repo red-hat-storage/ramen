@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -92,6 +93,43 @@ type DRPlacementControlReconciler struct {
 	ObjStoreGetter                 ObjectStoreGetter
 	RateLimiter                    *workqueue.TypedRateLimiter[reconcile.Request]
 	numClustersQueriedSuccessfully int
+
+	// kcMutex serializes the check for a Restore and the create or update of the global
+	// KlusterletConfig, as DRPC reconciles can run concurrently. done is guarded by the mutex and
+	// is set once the KlusterletConfig was ensured for a Restore, so that the work is not repeated
+	// by the reconciles of the other DRPCs.
+	kcMutex struct {
+		sync.Mutex
+		restoreReconciled bool
+	}
+}
+
+// ReconcileKlusterletConfig ensures the global KlusterletConfig for hub recovery. The
+// KlusterletConfig is global, not per DRPC, so once it was ensured for a Restore using the Ramen
+// configuration, every later call returns immediately. While no Restore of managed clusters
+// exists, or when ensuring it fails, done stays false and the next DRPC reconcile checks again.
+// Concurrent callers wait on kcMutex and then see done. The Ramen configuration is read by the
+// caller. When it cannot be retrieved or decoded, ramenConfig is nil: the default grace period is
+// then used only to create a missing KlusterletConfig, and an existing one is not changed. Such a
+// fallback does not mark the work done, so a later call retries with the configuration.
+func (r *DRPlacementControlReconciler) ReconcileKlusterletConfig(
+	ctx context.Context, ramenConfig *rmn.RamenConfig,
+) error {
+	r.kcMutex.Lock()
+	defer r.kcMutex.Unlock()
+
+	if r.kcMutex.restoreReconciled {
+		return nil
+	}
+
+	err := EnsureKlusterletConfigForRestore(ctx, r.Client, ramenConfig)
+	if errors.Is(err, ErrNoManagedClustersRestore) {
+		return nil
+	}
+
+	r.kcMutex.restoreReconciled = err == nil && ramenConfig != nil
+
+	return err
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -164,12 +202,6 @@ func (r *DRPlacementControlReconciler) Reconcile(ctx context.Context, req ctrl.R
 		return ctrl.Result{}, fmt.Errorf("failed to get DRPC object: %w", err)
 	}
 
-	// Hub recovery: when an ACM Restore restores managed clusters, ensure the global
-	// KlusterletConfig carries the AppliedManifestWork eviction grace period.
-	if err := EnsureKlusterletConfigForRestore(ctx, r.Client); err != nil {
-		logger.Info("Failed to ensure KlusterletConfig for hub recovery", "error", err.Error())
-	}
-
 	// Save a copy of the instance status to be used for the VRG status update comparison
 	drpc.Status.DeepCopyInto(&r.savedInstanceStatus)
 	r.savedDRActionCount = drpc.GetAnnotations()[DRActionCountAnnotation]
@@ -177,6 +209,19 @@ func (r *DRPlacementControlReconciler) Reconcile(ctx context.Context, req ctrl.R
 	ensureDRPCConditionsInited(&drpc.Status.Conditions, drpc.Generation, "Initialization")
 
 	_, ramenConfig, err := ConfigMapGet(ctx, r.APIReader)
+	if err != nil {
+		logger.Info("Failed to get the ramen configMap for hub recovery",
+			"error", err.Error())
+
+		ramenConfig = nil
+	}
+
+	// Hub recovery: when an ACM Restore restores managed clusters, ensure the global
+	// KlusterletConfig carries the configured AppliedManifestWork eviction grace period.
+	if restoreErr := r.ReconcileKlusterletConfig(ctx, ramenConfig); restoreErr != nil {
+		logger.Info("Failed to ensure KlusterletConfig for hub recovery", "error", restoreErr.Error())
+	}
+
 	if err != nil {
 		err = fmt.Errorf("failed to get the ramen configMap: %w", err)
 		r.recordFailure(ctx, drpc, nil, "Error", err.Error(), logger)
@@ -507,18 +552,16 @@ func (r *DRPlacementControlReconciler) createDRPCInstance(
 
 	d.drType = DRTypeAsync
 
-	if !allVRGPeerClassesOffloaded(vrgs) {
-		isMetro, _, err := dRPolicySupportsMetro(drPolicy, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check if DRPolicy supports Metro: %w", err)
-		}
+	isMetro, _, err := dRPolicySupportsMetro(drPolicy, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check if DRPolicy supports Metro: %w", err)
+	}
 
-		if isMetro {
-			d.volSyncDisabled = true
-			d.drType = DRTypeSync
+	if isMetro {
+		d.volSyncDisabled = true
+		d.drType = DRTypeSync
 
-			log.Info("volsync is set to disabled")
-		}
+		log.Info("volsync is set to disabled")
 	}
 
 	if !d.volSyncDisabled && drpcInAdminNamespace(drpc, ramenConfig) {
@@ -529,27 +572,6 @@ func (r *DRPlacementControlReconciler) createDRPCInstance(
 	d.instance.Status.DeepCopyInto(&d.savedInstanceStatus)
 
 	return d, nil
-}
-
-// allVRGPeerClassesOffloaded returns true if every PeerClass across all VRGs
-// has its Offloaded field set to true. When true, the workload uses only
-// offloaded storage classes and should never be treated as metro DR.
-func allVRGPeerClassesOffloaded(vrgs map[string]*rmn.VolumeReplicationGroup) bool {
-	found := false
-
-	for _, vrg := range vrgs {
-		if vrg.Spec.Async != nil {
-			for i := range vrg.Spec.Async.PeerClasses {
-				if !vrg.Spec.Async.PeerClasses[i].Offloaded {
-					return false
-				}
-
-				found = true
-			}
-		}
-	}
-
-	return found
 }
 
 func (r *DRPlacementControlReconciler) loadNetworkMapping(
@@ -775,7 +797,7 @@ func GetDRClusters(ctx context.Context, client client.Client, drPolicy *rmn.DRPo
 }
 
 // updateObjectMetadata updates drpc labels, annotations and finalizer, and also updates placementObj finalizer
-func (r DRPlacementControlReconciler) updateObjectMetadata(ctx context.Context,
+func (r *DRPlacementControlReconciler) updateObjectMetadata(ctx context.Context,
 	drpc *rmn.DRPlacementControl, placementObj client.Object, log logr.Logger,
 ) error {
 	var update bool
@@ -1631,7 +1653,10 @@ func (r *DRPlacementControlReconciler) updateDRPCStatus(
 		r.savedDRActionCount = annotation
 	}
 
-	r.updateResourceCondition(ctx, drpc, userPlacement, log, vrgs)
+	vrg := r.updateResourceCondition(ctx, drpc, userPlacement, log, vrgs)
+	if vrg != nil {
+		r.reconcileDRPCNonConsistencyGroupDeprecation(drpc, vrg, log)
+	}
 
 	// set metrics if DRPC is not being deleted and if finalizer exists
 	if !isBeingDeleted(drpc, userPlacement) && controllerutil.ContainsFinalizer(drpc, DRPCFinalizer) {
@@ -1668,17 +1693,18 @@ func (r *DRPlacementControlReconciler) updateDRPCStatus(
 // updateResourceCondition updates DRPC status sub-resource with updated status from VRG if one exists,
 // - The status update is NOT intended for a VRG that should be cleaned up on a peer cluster
 // It also updates DRPC ConditionProtected based on current state of VRG.
+// It returns the VRG used for the update, or nil when none was selected.
 //
 //nolint:funlen,cyclop
 func (r *DRPlacementControlReconciler) updateResourceCondition(
 	ctx context.Context, drpc *rmn.DRPlacementControl, userPlacement client.Object,
 	log logr.Logger, vrgs map[string]*rmn.VolumeReplicationGroup,
-) {
+) *rmn.VolumeReplicationGroup {
 	vrgNamespace, err := selectVRGNamespace(r.Client, log, drpc, userPlacement)
 	if err != nil {
 		log.Info("Failed to select VRG namespace", "error", err)
 
-		return
+		return nil
 	}
 
 	clusterName := r.clusterForVRGStatus(drpc, userPlacement, log)
@@ -1686,7 +1712,7 @@ func (r *DRPlacementControlReconciler) updateResourceCondition(
 		log.Info("Unable to determine managed cluster from which to inspect VRG, " +
 			"skipping processing ResourceConditions")
 
-		return
+		return nil
 	}
 
 	// Retrieve VRG either from argument or fetch from managed cluster/S3 store
@@ -1694,7 +1720,7 @@ func (r *DRPlacementControlReconciler) updateResourceCondition(
 	if vrg == nil {
 		log.Info("No valid VRG found, skipping update")
 
-		return
+		return nil
 	}
 
 	// Update DRPC with VRG details
@@ -1731,6 +1757,8 @@ func (r *DRPlacementControlReconciler) updateResourceCondition(
 
 	updateDRPCProtectedCondition(drpc, vrg, clusterName)
 	updateDRPCReplicationHealthyCondition(drpc, vrg)
+
+	return vrg
 }
 
 // getVRG retrieves a VRG either from the provided map or fetches it from the managed cluster/S3 store.

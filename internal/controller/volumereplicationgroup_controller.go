@@ -587,6 +587,9 @@ type VRGInstance struct {
 	objectStorers        map[string]cachedObjectStorer
 	s3StoreAccessors     []s3StoreAccessor
 	result               ctrl.Result
+	// selectedNonCGVolRep is set for this reconcile when PVC classification
+	// chooses VolumeReplication because the peer is not grouping.
+	selectedNonCGVolRep bool
 }
 
 // struct with pv with volrepclass and volsync
@@ -625,12 +628,21 @@ const (
 	// VolumeGroupReplicationClass global label
 	GlobalReplicationLabel = "ramendr.openshift.io/global"
 
+	// VolumeGroupReplicationClass label. Value "true" enables resync-on-primary for VGRs
+	// that use the class. Grouping path only; VR-only is unsupported.
+	ResyncOnPrimaryLabel = "ramendr.openshift.io/resync-on-primary"
+
 	// Maintenance mode label
 	MModesLabel = util.MModesLabel
 
 	// VolumeReplicationClass and VolumeGroupReplicationClass schedule parameter key
 	ReplicationClassScheduleKey = "schedulingInterval"
 )
+
+// IsResyncOnPrimaryEnabled checks if the resync-on-primary label is set to "true" on the class.
+func IsResyncOnPrimaryEnabled(labels map[string]string) bool {
+	return labels[ResyncOnPrimaryLabel] == "true"
+}
 
 func (v *VRGInstance) requeue() {
 	v.result.Requeue = true
@@ -817,6 +829,24 @@ func (v *VRGInstance) updateSyncPVCs(pvcList *corev1.PersistentVolumeClaimList) 
 		return err
 	}
 
+	peerClasses := []ramendrv1alpha1.PeerClass{}
+	if v.instance.Spec.Sync != nil {
+		peerClasses = v.instance.Spec.Sync.PeerClasses
+	}
+
+	offloaded, err := v.processOffloadedPVCs(pvcList, peerClasses)
+	if err != nil {
+		return err
+	}
+
+	if offloaded {
+		return v.processGloballyOffloadedPVCs(pvcList, peerClasses)
+	}
+
+	if err := v.rejectOffloadedPVCsWithoutPeers(pvcList); err != nil {
+		return err
+	}
+
 	v.volRepPVCs = make([]corev1.PersistentVolumeClaim, len(pvcList.Items))
 	total := copy(v.volRepPVCs, pvcList.Items)
 
@@ -838,13 +868,13 @@ func (v *VRGInstance) updateAsyncPVCs(pvcList *corev1.PersistentVolumeClaimList)
 		return nil
 	}
 
-	offloaded, err := v.processOffloadedPVCs(pvcList)
+	offloaded, err := v.processOffloadedPVCs(pvcList, v.instance.Spec.Async.PeerClasses)
 	if err != nil {
 		return err
 	}
 
 	if offloaded {
-		return v.processGloballyOffloadedPVCs(pvcList)
+		return v.processGloballyOffloadedPVCs(pvcList, v.instance.Spec.Async.PeerClasses)
 	}
 
 	// Separate PVCs targeted for VolRep from PVCs targeted for VolSync
@@ -997,6 +1027,9 @@ func (v *VRGInstance) separatePVCsUsingOnlySC(storageClass *storagev1.StorageCla
 		for _, replicationClass := range v.replClassList.Items {
 			if storageClass.Provisioner == replicationClass.Spec.Provisioner {
 				v.volRepPVCs = append(v.volRepPVCs, *pvc)
+				// No peer class is present, so this match is individual VolumeReplication.
+				v.useNonConsistencyGroupVolRep(false)
+
 				replicationClassMatchFound = true
 
 				break
@@ -1024,6 +1057,10 @@ func (v *VRGInstance) separatePVCUsingPeerClassAndSC(peerClasses []ramendrv1alph
 		if peerClass.ReplicationID != "" {
 			replicationClass := v.findReplicationClassUsingPeerClass(peerClass, storageClass)
 			if replicationClass != nil {
+				// Grouping comes from the peer class discovered for this StorageClass.
+				// False selects individual VolumeReplication; true selects a consistency group.
+				v.useNonConsistencyGroupVolRep(peerClass.Grouping)
+
 				// label VolRep PVCs if peerClass.grouping is enabled
 				if peerClass.Grouping {
 					if err := v.addVolRepConsistencyGroupLabel(pvc); err != nil {
@@ -1783,6 +1820,7 @@ func (v *VRGInstance) updateVRGConditionsAndStatus(result ctrl.Result) ctrl.Resu
 	// Check if as Secondary things would be updated accordingly, should protectedPVC be cleared?
 	// cleanupProtectedPVCs
 	v.updateVRGConditions()
+	v.reconcileVRGNonConsistencyGroupDeprecation()
 
 	return v.updateVRGStatus(result)
 }
