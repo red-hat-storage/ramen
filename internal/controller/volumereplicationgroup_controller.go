@@ -614,12 +614,21 @@ const (
 	// VolumeGroupReplicationClass global label
 	GlobalReplicationLabel = "ramendr.openshift.io/global"
 
+	// VolumeGroupReplicationClass label. Value "true" enables resync-on-primary for VGRs
+	// that use the class. Grouping path only; VR-only is unsupported.
+	ResyncOnPrimaryLabel = "ramendr.openshift.io/resync-on-primary"
+
 	// Maintenance mode label
 	MModesLabel = "ramendr.openshift.io/maintenancemodes"
 
 	// VolumeReplicationClass and VolumeGroupReplicationClass schedule parameter key
 	ReplicationClassScheduleKey = "schedulingInterval"
 )
+
+// IsResyncOnPrimaryEnabled checks if the resync-on-primary label is set to "true" on the class.
+func IsResyncOnPrimaryEnabled(labels map[string]string) bool {
+	return labels[ResyncOnPrimaryLabel] == "true"
+}
 
 func (v *VRGInstance) requeue() {
 	v.result.Requeue = true
@@ -2151,10 +2160,10 @@ func (v *VRGInstance) updateVRGAutoCleanupCondition() {
 	}
 }
 
-// updateVRGConditions updates four summary conditions VRGConditionTypeDataReady,
-// VRGConditionTypeClusterDataProtected, VRGConditionTypeDataProtected and
-// VRGConditionTypeDestinationInfoAvailable, at the VRG level based on the
-// corresponding PVC level conditions in the VRG:
+// updateVRGConditions updates five summary conditions VRGConditionTypeDataReady,
+// VRGConditionTypeClusterDataProtected, VRGConditionTypeDataProtected,
+// VRGConditionTypeDestinationInfoAvailable and VRGConditionTypeReplicationHealthy,
+// at the VRG level based on the corresponding PVC level conditions in the VRG:
 //
 // The VRGConditionTypeClusterDataReady summary condition is not a PVC level
 // condition and is updated elsewhere.
@@ -2187,6 +2196,10 @@ func (v *VRGInstance) updateVRGConditions() {
 
 	if destInfoCond := v.aggregateVolRepDestinationInfoAvailableCondition(); destInfoCond != nil {
 		v.logAndSetConditions(VRGConditionTypeDestinationInfoAvailable, destInfoCond)
+	}
+
+	if replicationHealthyCond := v.aggregateVolRepReplicationHealthyCondition(); replicationHealthyCond != nil {
+		v.logAndSetConditions(VRGConditionTypeReplicationHealthy, replicationHealthyCond)
 	}
 
 	v.updateVRGLastGroupSyncTime()
